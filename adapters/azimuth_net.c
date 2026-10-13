@@ -1414,11 +1414,11 @@ static HRESULT net_make_hstring(const wchar_t *text, void **out) {
 }
 static HRESULT STDMETHODCALLTYPE net_result_get_0(NetTokenResult *self, void **out) {
     (void)self;
-    return net_make_hstring(L"XBL3.0 x=1;fh2online-getter-0", out);
+    return net_make_hstring(L"fh2online-signature", out); /* Signature */
 }
 static HRESULT STDMETHODCALLTYPE net_result_get_1(NetTokenResult *self, void **out) {
     (void)self;
-    return net_make_hstring(L"fh2online-getter-1", out);
+    return net_make_hstring(L"XBL3.0 x=1;fh2online-token", out); /* Token */
 }
 static HRESULT STDMETHODCALLTYPE net_result_unknown(NetTokenResult *self, void **out) {
     (void)self;
