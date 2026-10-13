@@ -1178,6 +1178,200 @@ static void net_read_settings(const wchar_t *directory) {
     }
 }
 
+/* ------------------------------------------------------------ WinRT trace */
+/* Diagnostics for the offline gates: which WinRT classes the game activates
+   (Azimuth's vccorlib110!GetActivationFactoryByPCWSTR) and whether it asks
+   User for an Xbox Live token. Written to FH2_ExtraOptions.log. */
+
+#define NET_ACTIVATION_RVA 0x6da50u
+#define NET_TRACE_MAX_LINES 400
+static const unsigned char net_activation_hash[32] = {
+    0x1d, 0x9b, 0x52, 0xa3, 0x5e, 0x58, 0x70, 0xbb, 0xb1, 0x29, 0x6b, 0x5c, 0x28, 0xb2, 0x0d, 0xa8,
+    0x48, 0xb3, 0x6a, 0xd7, 0xbb, 0x64, 0x7b, 0x24, 0x1b, 0x4f, 0xb4, 0xfc, 0x70, 0xbd, 0x96, 0x0f};
+/* The providers FUN_14006da50 asks in order; REGDB_E_CLASSNOTREG means "next". */
+static const unsigned net_activation_providers[7] = {0x143020u, 0x2cf50u, 0x1431e0u, 0x93bd0u,
+                                                     0x144250u, 0x1454b0u, 0x14a310u};
+typedef HRESULT (*NetActivationProvider)(const wchar_t *, const void *, void **);
+
+/* User.GetTokenAndSignature* slots of the two User vtables (.rdata RVAs) and
+   the Azimuth functions they hold. */
+static const unsigned net_token_slots[6] = {0x24ff90u, 0x24ff98u, 0x24ffa0u,
+                                            0x250290u, 0x250298u, 0x2502a0u};
+static const unsigned net_token_targets[6] = {0x239b0u, 0x239d0u, 0x23a20u,
+                                              0x23ee0u, 0x23f00u, 0x23f50u};
+typedef HRESULT (*NetTokenFn)(void *, void *, void *, void *, void *, void *, void *, void *);
+static NetTokenFn net_token_original[6];
+
+static volatile LONG net_trace_lines;
+static SRWLOCK net_trace_lock = SRWLOCK_INIT;
+static unsigned net_trace_seen[512];
+static unsigned net_trace_seen_count;
+
+static int net_trace_first(const wchar_t *name, HRESULT result) {
+    unsigned hash = 2166136261u ^ (unsigned)result;
+    for (const wchar_t *p = name; p && *p; ++p) {
+        hash = (hash ^ (unsigned)*p) * 16777619u;
+    }
+    int first = 1;
+    AcquireSRWLockExclusive(&net_trace_lock);
+    for (unsigned i = 0; i < net_trace_seen_count; ++i) {
+        if (net_trace_seen[i] == hash) {
+            first = 0;
+            break;
+        }
+    }
+    if (first && net_trace_seen_count < ARRAY_COUNT(net_trace_seen)) {
+        net_trace_seen[net_trace_seen_count++] = hash;
+    }
+    ReleaseSRWLockExclusive(&net_trace_lock);
+    return first;
+}
+
+static void net_trace_line(Buffer *line) {
+    if (InterlockedIncrement(&net_trace_lines) <= NET_TRACE_MAX_LINES &&
+        buffer_append_text(line, "\r\n")) {
+        log_append((const char *)line->data);
+    }
+    buffer_free(line);
+}
+
+static HRESULT net_get_activation_factory(const wchar_t *name, const void *iid, void **out) {
+    if (!name || !out) {
+        return E_POINTER;
+    }
+    *out = 0;
+    HRESULT result = REGDB_E_CLASSNOTREG;
+    unsigned provider = 0;
+    for (; provider < ARRAY_COUNT(net_activation_providers); ++provider) {
+        NetActivationProvider call = (NetActivationProvider)(uintptr_t)(
+            net_azimuth_base + net_activation_providers[provider]);
+        result = call(name, iid, out);
+        if (result != REGDB_E_CLASSNOTREG) {
+            break;
+        }
+    }
+    if (net_trace_first(name, result)) {
+        Buffer line = {0};
+        if (buffer_append_text(&line, "WINRT: activate ") &&
+            buffer_append_json_wide(&line, name, wide_length(name)) &&
+            buffer_append_text(&line, " provider=") &&
+            buffer_append_number(&line, provider) && buffer_append_text(&line, " -> ")) {
+            buffer_append_hresult(&line, result);
+        }
+        net_trace_line(&line);
+    }
+    /* Azimuth terminates the process here on failure; the log line above is
+       the point of this build, so hand the failure back instead. */
+    return result;
+}
+
+static void net_trace_hstring(Buffer *line, void *value) {
+    struct {
+        unsigned magic, length;
+        unsigned long long reserved;
+        const wchar_t *text;
+    } header;
+    static wchar_t text[256];
+    if (!value) {
+        buffer_append_text(line, "\"\"");
+        return;
+    }
+    if (!memory_read(value, &header, sizeof(header)) || header.magic != 0x32485346u) {
+        buffer_append_text(line, "<not an HSTRING>");
+        return;
+    }
+    unsigned length = header.length < 255 ? header.length : 255;
+    AcquireSRWLockExclusive(&net_trace_lock);
+    if (length && !memory_read(header.text, text, length * sizeof(wchar_t))) {
+        length = 0;
+    }
+    text[length] = 0;
+    buffer_append_json_wide(line, text, length);
+    ReleaseSRWLockExclusive(&net_trace_lock);
+}
+
+static void net_trace_token(unsigned slot, void *method, void *url) {
+    Buffer line = {0};
+    if (buffer_append_text(&line, "XBL: User.GetTokenAndSignature slot ") &&
+        buffer_append_number(&line, slot) && buffer_append_text(&line, " ")) {
+        net_trace_hstring(&line, method);
+        buffer_append_text(&line, " ");
+        net_trace_hstring(&line, url);
+    }
+    net_trace_line(&line);
+}
+
+#define NET_TOKEN_THUNK(n)                                                                      \
+    static HRESULT net_token_##n(void *a, void *b, void *c, void *d, void *e, void *f, void *g, \
+                                 void *h) {                                                     \
+        net_trace_token(n, b, c);                                                               \
+        return net_token_original[n](a, b, c, d, e, f, g, h);                                   \
+    }
+NET_TOKEN_THUNK(0)
+NET_TOKEN_THUNK(1)
+NET_TOKEN_THUNK(2)
+NET_TOKEN_THUNK(3)
+NET_TOKEN_THUNK(4)
+NET_TOKEN_THUNK(5)
+static const NetTokenFn net_token_thunks[6] = {net_token_0, net_token_1, net_token_2,
+                                               net_token_3, net_token_4, net_token_5};
+
+static int net_write_jump(unsigned char *at, const void *target, const unsigned char *hash,
+                          unsigned hashed) {
+    unsigned char current[32], digest[32];
+    unsigned char jump[NET_HOOK_JUMP_BYTES] = {0xff, 0x25, 0x00, 0x00, 0x00, 0x00};
+    uintptr_t value = (uintptr_t)target;
+    for (unsigned i = 0; i < 8; ++i) {
+        jump[6 + i] = (unsigned char)(value >> (8 * i));
+    }
+    if (hashed > sizeof(current) || !memory_read(at, current, hashed)) {
+        return 0;
+    }
+    if (memory_equal(current, jump, sizeof(jump))) {
+        return 2;
+    }
+    Sha256Context context;
+    sha256_initialize(&context);
+    sha256_update(&context, current, hashed);
+    sha256_finalize(&context, digest);
+    if (!memory_equal(digest, hash, sizeof(digest))) {
+        return 0;
+    }
+    DWORD old_protection, ignored;
+    if (!VirtualProtect(at, sizeof(jump), PAGE_EXECUTE_READWRITE, &old_protection)) {
+        return -1;
+    }
+    memory_copy(at, jump, sizeof(jump));
+    FlushInstructionCache(GetCurrentProcess(), at, sizeof(jump));
+    VirtualProtect(at, sizeof(jump), old_protection, &ignored);
+    return 1;
+}
+
+static void net_install_trace(void) {
+    int activation = net_write_jump(net_azimuth_base + NET_ACTIVATION_RVA,
+                                    (const void *)net_get_activation_factory,
+                                    net_activation_hash, 0x20);
+    log_append(activation > 0 ? "WINRT: activation trace installed.\r\n"
+                              : "WINRT: activation trace NOT installed (unexpected bytes).\r\n");
+    unsigned patched = 0;
+    for (unsigned i = 0; i < ARRAY_COUNT(net_token_slots); ++i) {
+        void **slot = (void **)(net_azimuth_base + net_token_slots[i]);
+        void *expected = net_azimuth_base + net_token_targets[i], *current = 0;
+        DWORD old_protection, ignored;
+        if (!memory_read(slot, &current, sizeof(current)) || current != expected ||
+            !VirtualProtect(slot, sizeof(*slot), PAGE_READWRITE, &old_protection)) {
+            continue;
+        }
+        net_token_original[i] = (NetTokenFn)(uintptr_t)expected;
+        *slot = (void *)(uintptr_t)net_token_thunks[i];
+        VirtualProtect(slot, sizeof(*slot), old_protection, &ignored);
+        ++patched;
+    }
+    log_append(patched == ARRAY_COUNT(net_token_slots)
+                   ? "XBL: token trace installed on all 6 User slots.\r\n"
+                   : "XBL: token trace installed on only some User slots.\r\n");
+}
+
 void azimuth_apply_network(const wchar_t *directory) {
     net_read_settings(directory);
     if (net_mode == NET_MODE_OFF) {
@@ -1187,6 +1381,7 @@ void azimuth_apply_network(const wchar_t *directory) {
     net_azimuth_base = (unsigned char *)GetModuleHandleW(NULL);
     int result = net_install_hook(net_azimuth_base);
     if (result > 0) {
+        net_install_trace();
         log_append(net_mode == NET_MODE_PROXY
                        ? "NETWORK: HTTP hook installed; requests are captured to "
                          "FH2_Network.jsonl and forwarded to the [Network] Server.\r\n"
