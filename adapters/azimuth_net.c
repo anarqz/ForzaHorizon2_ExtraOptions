@@ -18,6 +18,7 @@
 #include "logging.h"
 #include "sha256.h"
 #include "support.h"
+#include <stddef.h>
 #include <winhttp.h>
 
 #define NET_CLSCTX_INPROC_SERVER 0x1u
@@ -1235,13 +1236,11 @@ static void net_trace_line(Buffer *line) {
     buffer_free(line);
 }
 
-static HRESULT net_get_activation_factory(const wchar_t *name, const void *iid, void **out) {
-    if (!name || !out) {
-        return E_POINTER;
-    }
-    *out = 0;
+static HRESULT net_activate_raw(const wchar_t *name, const void *iid, void **out,
+                                unsigned *provider_out) {
     HRESULT result = REGDB_E_CLASSNOTREG;
     unsigned provider = 0;
+    *out = 0;
     for (; provider < ARRAY_COUNT(net_activation_providers); ++provider) {
         NetActivationProvider call = (NetActivationProvider)(uintptr_t)(
             net_azimuth_base + net_activation_providers[provider]);
@@ -1249,6 +1248,790 @@ static HRESULT net_get_activation_factory(const wchar_t *name, const void *iid, 
         if (result != REGDB_E_CLASSNOTREG) {
             break;
         }
+    }
+    if (provider_out) {
+        *provider_out = provider;
+    }
+    return result;
+}
+
+/* ------------------------------------------------- DataWriter replacement */
+/* XSAPI turns every response body into an IBuffer with a default-constructed
+   Windows.Storage.Streams.DataWriter (WriteBytes, then DetachBuffer), and
+   treats an empty buffer as "no result": a 2xx reply then completes with a
+   null result and the game dereferences it (achievements, game+0x41fd28).
+   Azimuth 0.9.7 has no IDataWriter of its own (the class comes from a generic
+   table). The first time XSAPI asks for the factory, we write four bytes with
+   Azimuth's writer and detach them; if they do not come back, every later
+   writer is this one, which detaches into Azimuth's own Buffer class. */
+
+static const unsigned char net_iid_inspectable[16] = {0xe0, 0xe2, 0x86, 0xaf, 0x2d, 0xb1,
+                                                      0x6a, 0x4c, 0x9c, 0x5a, 0xd7, 0xaa,
+                                                      0x65, 0x10, 0x1e, 0x90};
+static const unsigned char net_iid_activation_factory[16] = {0x35, 0x00, 0x00, 0x00, 0x00, 0x00,
+                                                             0x00, 0x00, 0xc0, 0x00, 0x00, 0x00,
+                                                             0x00, 0x00, 0x00, 0x46};
+static const unsigned char net_iid_data_writer[16] = {0x65, 0x92, 0xb8, 0x64, 0x41, 0xd3,
+                                                      0x22, 0x49, 0xb3, 0x8a, 0xdd, 0x4a,
+                                                      0xf8, 0x80, 0x8c, 0x4e};
+static const unsigned char net_iid_closable[16] = {0x29, 0xa8, 0xd5, 0x30, 0xa4, 0x7f, 0x26, 0x40,
+                                                   0x83, 0xbb, 0xd7, 0x5b, 0xae, 0x4e, 0xa9, 0x9e};
+static const unsigned char net_iid_buffer_byte_access[16] = {0xef, 0x0f, 0x5a, 0x90, 0x53, 0xbc,
+                                                             0xdf, 0x11, 0x8c, 0x49, 0x00, 0x1e,
+                                                             0x4f, 0xc6, 0x86, 0xda};
+static const unsigned char net_iid_buffer_factory[16] = {0x4d, 0x91, 0xaf, 0x71, 0x0f, 0xc1,
+                                                         0x4b, 0x48, 0xbc, 0x50, 0x14, 0xbc,
+                                                         0x62, 0x3b, 0x3a, 0x27};
+#define NET_E_NOTIMPL ((HRESULT)0x80004001L)
+#define NET_E_BOUNDS ((HRESULT)0x8000000BL)
+#define NET_RO_E_CLOSED ((HRESULT)0x80000013L)
+
+/* Just enough of the interfaces we call on Azimuth's objects. */
+typedef struct NetCom NetCom;
+typedef struct {
+    HRESULT(STDMETHODCALLTYPE *QueryInterface)(NetCom *, REFIID, void **);
+    ULONG(STDMETHODCALLTYPE *AddRef)(NetCom *);
+    ULONG(STDMETHODCALLTYPE *Release)(NetCom *);
+    HRESULT(STDMETHODCALLTYPE *GetIids)(NetCom *, ULONG *, void **);
+    HRESULT(STDMETHODCALLTYPE *GetRuntimeClassName)(NetCom *, void **);
+    HRESULT(STDMETHODCALLTYPE *GetTrustLevel)(NetCom *, int *);
+    /* IActivationFactory::ActivateInstance, IBufferFactory::Create,
+       IBuffer::get_Capacity or IDataWriter::get_UnstoredBufferLength */
+    HRESULT(STDMETHODCALLTYPE *Slot6)(NetCom *, void *);
+    void *slots7to11[5];
+    HRESULT(STDMETHODCALLTYPE *WriteBytes)(NetCom *, UINT32, BYTE *); /* IDataWriter */
+    void *slots13to30[18];
+    HRESULT(STDMETHODCALLTYPE *DetachBuffer)(NetCom *, NetCom **); /* IDataWriter */
+} NetComVtbl;
+struct NetCom {
+    const NetComVtbl *lpVtbl;
+};
+typedef struct {
+    HRESULT(STDMETHODCALLTYPE *QueryInterface)(NetCom *, REFIID, void **);
+    ULONG(STDMETHODCALLTYPE *AddRef)(NetCom *);
+    ULONG(STDMETHODCALLTYPE *Release)(NetCom *);
+    HRESULT(STDMETHODCALLTYPE *GetIids)(NetCom *, ULONG *, void **);
+    HRESULT(STDMETHODCALLTYPE *GetRuntimeClassName)(NetCom *, void **);
+    HRESULT(STDMETHODCALLTYPE *GetTrustLevel)(NetCom *, int *);
+    HRESULT(STDMETHODCALLTYPE *get_Capacity)(NetCom *, UINT32 *);
+    HRESULT(STDMETHODCALLTYPE *get_Length)(NetCom *, UINT32 *);
+    HRESULT(STDMETHODCALLTYPE *put_Length)(NetCom *, UINT32);
+} NetIBufferVtbl;
+typedef struct {
+    HRESULT(STDMETHODCALLTYPE *QueryInterface)(NetCom *, REFIID, void **);
+    ULONG(STDMETHODCALLTYPE *AddRef)(NetCom *);
+    ULONG(STDMETHODCALLTYPE *Release)(NetCom *);
+    HRESULT(STDMETHODCALLTYPE *Buffer)(NetCom *, BYTE **);
+} NetByteAccessVtbl;
+typedef struct {
+    HRESULT(STDMETHODCALLTYPE *QueryInterface)(NetCom *, REFIID, void **);
+    ULONG(STDMETHODCALLTYPE *AddRef)(NetCom *);
+    ULONG(STDMETHODCALLTYPE *Release)(NetCom *);
+    HRESULT(STDMETHODCALLTYPE *GetIids)(NetCom *, ULONG *, void **);
+    HRESULT(STDMETHODCALLTYPE *GetRuntimeClassName)(NetCom *, void **);
+    HRESULT(STDMETHODCALLTYPE *GetTrustLevel)(NetCom *, int *);
+    HRESULT(STDMETHODCALLTYPE *Create)(NetCom *, UINT32, NetCom **);
+} NetBufferFactoryVtbl;
+typedef struct {
+    HRESULT(STDMETHODCALLTYPE *QueryInterface)(NetCom *, REFIID, void **);
+    ULONG(STDMETHODCALLTYPE *AddRef)(NetCom *);
+    ULONG(STDMETHODCALLTYPE *Release)(NetCom *);
+    HRESULT(STDMETHODCALLTYPE *GetIids)(NetCom *, ULONG *, void **);
+    HRESULT(STDMETHODCALLTYPE *GetRuntimeClassName)(NetCom *, void **);
+    HRESULT(STDMETHODCALLTYPE *GetTrustLevel)(NetCom *, int *);
+    HRESULT(STDMETHODCALLTYPE *ActivateInstance)(NetCom *, NetCom **);
+} NetActivationFactoryVtbl;
+
+#define NET_IBUFFER(object) ((const NetIBufferVtbl *)(const void *)(object)->lpVtbl)
+
+static SRWLOCK net_writer_lock = SRWLOCK_INIT;
+static int net_writer_state; /* 0 untested, 1 Azimuth's works, 2 replaced */
+static NetCom *net_buffer_factory;
+static volatile LONG net_writer_logged;
+
+static void net_writer_log_once(volatile LONG *flag, const char *message) {
+    if (!InterlockedCompareExchange(flag, 1, 0)) {
+        log_append(message);
+    }
+}
+
+/* Reads an Azimuth IBuffer: pointer and length (IBufferByteAccess). */
+static int net_buffer_bytes(NetCom *buffer, BYTE **data, UINT32 *length) {
+    NetCom *access = 0;
+    *data = 0;
+    *length = 0;
+    if (!buffer || FAILED(NET_IBUFFER(buffer)->get_Length(buffer, length))) {
+        return 0;
+    }
+    if (FAILED(buffer->lpVtbl->QueryInterface(buffer, (REFIID)net_iid_buffer_byte_access,
+                                              (void **)&access)) ||
+        !access) {
+        return 0;
+    }
+    HRESULT result = ((const NetByteAccessVtbl *)(const void *)access->lpVtbl)->Buffer(access, data);
+    access->lpVtbl->Release(access);
+    return SUCCEEDED(result) && (*data || !*length);
+}
+
+/* A new Azimuth Buffer holding a copy of the bytes. */
+static HRESULT net_buffer_create(const unsigned char *data, size_t size, NetCom **out) {
+    *out = 0;
+    if (size > 0xffffffffu) {
+        return E_OUTOFMEMORY;
+    }
+    AcquireSRWLockExclusive(&net_writer_lock);
+    if (!net_buffer_factory) {
+        void *factory = 0;
+        if (SUCCEEDED(net_activate_raw(L"Windows.Storage.Streams.Buffer", net_iid_buffer_factory,
+                                       &factory, 0))) {
+            net_buffer_factory = factory;
+        }
+    }
+    NetCom *factory = net_buffer_factory;
+    ReleaseSRWLockExclusive(&net_writer_lock);
+    if (!factory) {
+        return REGDB_E_CLASSNOTREG;
+    }
+    NetCom *buffer = 0;
+    HRESULT result = ((const NetBufferFactoryVtbl *)(const void *)factory->lpVtbl)
+                         ->Create(factory, size ? (UINT32)size : 1u, &buffer);
+    if (FAILED(result) || !buffer) {
+        return FAILED(result) ? result : E_OUTOFMEMORY;
+    }
+    NetCom *access = 0;
+    BYTE *target = 0;
+    if (size) {
+        result = buffer->lpVtbl->QueryInterface(buffer, (REFIID)net_iid_buffer_byte_access,
+                                                (void **)&access);
+        if (SUCCEEDED(result) && access) {
+            result = ((const NetByteAccessVtbl *)(const void *)access->lpVtbl)->Buffer(access, &target);
+            access->lpVtbl->Release(access);
+        }
+        if (SUCCEEDED(result) && target) {
+            memory_copy(target, data, size);
+        } else if (SUCCEEDED(result)) {
+            result = E_POINTER;
+        }
+    }
+    if (SUCCEEDED(result)) {
+        result = NET_IBUFFER(buffer)->put_Length(buffer, (UINT32)size);
+    }
+    if (FAILED(result)) {
+        buffer->lpVtbl->Release(buffer);
+        return result;
+    }
+    *out = buffer;
+    return S_OK;
+}
+
+typedef struct NetWriter NetWriter;
+typedef struct NetWriterClosable NetWriterClosable;
+typedef struct {
+    HRESULT(STDMETHODCALLTYPE *QueryInterface)(NetWriter *, REFIID, void **);
+    ULONG(STDMETHODCALLTYPE *AddRef)(NetWriter *);
+    ULONG(STDMETHODCALLTYPE *Release)(NetWriter *);
+    HRESULT(STDMETHODCALLTYPE *GetIids)(NetWriter *, ULONG *, void **);
+    HRESULT(STDMETHODCALLTYPE *GetRuntimeClassName)(NetWriter *, void **);
+    HRESULT(STDMETHODCALLTYPE *GetTrustLevel)(NetWriter *, int *);
+    HRESULT(STDMETHODCALLTYPE *get_UnstoredBufferLength)(NetWriter *, UINT32 *);
+    HRESULT(STDMETHODCALLTYPE *get_UnicodeEncoding)(NetWriter *, int *);
+    HRESULT(STDMETHODCALLTYPE *put_UnicodeEncoding)(NetWriter *, int);
+    HRESULT(STDMETHODCALLTYPE *get_ByteOrder)(NetWriter *, int *);
+    HRESULT(STDMETHODCALLTYPE *put_ByteOrder)(NetWriter *, int);
+    HRESULT(STDMETHODCALLTYPE *WriteByte)(NetWriter *, BYTE);
+    HRESULT(STDMETHODCALLTYPE *WriteBytes)(NetWriter *, UINT32, BYTE *);
+    HRESULT(STDMETHODCALLTYPE *WriteBuffer)(NetWriter *, NetCom *);
+    HRESULT(STDMETHODCALLTYPE *WriteBufferRange)(NetWriter *, NetCom *, UINT32, UINT32);
+    HRESULT(STDMETHODCALLTYPE *WriteBoolean)(NetWriter *, BYTE);
+    HRESULT(STDMETHODCALLTYPE *WriteGuid)(NetWriter *, GUID);
+    HRESULT(STDMETHODCALLTYPE *WriteInt16)(NetWriter *, INT16);
+    HRESULT(STDMETHODCALLTYPE *WriteInt32)(NetWriter *, INT32);
+    HRESULT(STDMETHODCALLTYPE *WriteInt64)(NetWriter *, INT64);
+    HRESULT(STDMETHODCALLTYPE *WriteUInt16)(NetWriter *, UINT16);
+    HRESULT(STDMETHODCALLTYPE *WriteUInt32)(NetWriter *, UINT32);
+    HRESULT(STDMETHODCALLTYPE *WriteUInt64)(NetWriter *, UINT64);
+    HRESULT(STDMETHODCALLTYPE *WriteSingle)(NetWriter *, float);
+    HRESULT(STDMETHODCALLTYPE *WriteDouble)(NetWriter *, double);
+    HRESULT(STDMETHODCALLTYPE *WriteDateTime)(NetWriter *, INT64);
+    HRESULT(STDMETHODCALLTYPE *WriteTimeSpan)(NetWriter *, INT64);
+    HRESULT(STDMETHODCALLTYPE *WriteString)(NetWriter *, void *, UINT32 *);
+    HRESULT(STDMETHODCALLTYPE *MeasureString)(NetWriter *, void *, UINT32 *);
+    HRESULT(STDMETHODCALLTYPE *StoreAsync)(NetWriter *, void **);
+    HRESULT(STDMETHODCALLTYPE *FlushAsync)(NetWriter *, void **);
+    HRESULT(STDMETHODCALLTYPE *DetachBuffer)(NetWriter *, NetCom **);
+    HRESULT(STDMETHODCALLTYPE *DetachStream)(NetWriter *, void **);
+} NetWriterVtbl;
+typedef struct {
+    HRESULT(STDMETHODCALLTYPE *QueryInterface)(NetWriterClosable *, REFIID, void **);
+    ULONG(STDMETHODCALLTYPE *AddRef)(NetWriterClosable *);
+    ULONG(STDMETHODCALLTYPE *Release)(NetWriterClosable *);
+    HRESULT(STDMETHODCALLTYPE *GetIids)(NetWriterClosable *, ULONG *, void **);
+    HRESULT(STDMETHODCALLTYPE *GetRuntimeClassName)(NetWriterClosable *, void **);
+    HRESULT(STDMETHODCALLTYPE *GetTrustLevel)(NetWriterClosable *, int *);
+    HRESULT(STDMETHODCALLTYPE *Close)(NetWriterClosable *);
+} NetWriterClosableVtbl;
+struct NetWriterClosable {
+    const NetWriterClosableVtbl *lpVtbl;
+};
+struct NetWriter {
+    const NetWriterVtbl *lpVtbl;
+    NetWriterClosable closable;
+    volatile LONG references;
+    int closed, byte_order, encoding; /* ByteOrder: 0 little, 1 big (default) */
+    Buffer data;
+};
+
+static NetWriter *net_writer_from_closable(NetWriterClosable *closable) {
+    return (NetWriter *)(void *)((unsigned char *)closable - offsetof(NetWriter, closable));
+}
+
+static HRESULT STDMETHODCALLTYPE net_writer_query(NetWriter *self, REFIID iid, void **out) {
+    if (!out) {
+        return E_POINTER;
+    }
+    *out = 0;
+    if (memory_equal(iid, net_iid_unknown, 16) || memory_equal(iid, net_iid_inspectable, 16) ||
+        memory_equal(iid, net_iid_data_writer, 16) || memory_equal(iid, net_iid_agile, 16)) {
+        *out = self;
+    } else if (memory_equal(iid, net_iid_closable, 16)) {
+        *out = &self->closable;
+    } else {
+        return E_NOINTERFACE;
+    }
+    InterlockedIncrement(&self->references);
+    return S_OK;
+}
+
+static ULONG STDMETHODCALLTYPE net_writer_add_ref(NetWriter *self) {
+    return (ULONG)InterlockedIncrement(&self->references);
+}
+
+static ULONG STDMETHODCALLTYPE net_writer_release(NetWriter *self) {
+    LONG left = InterlockedDecrement(&self->references);
+    if (!left) {
+        buffer_free(&self->data);
+        net_free(self);
+    }
+    return (ULONG)left;
+}
+
+static HRESULT STDMETHODCALLTYPE net_writer_iids(NetWriter *self, ULONG *count, void **iids) {
+    (void)self;
+    if (count) {
+        *count = 0;
+    }
+    if (iids) {
+        *iids = 0;
+    }
+    return S_OK;
+}
+
+static HRESULT STDMETHODCALLTYPE net_writer_class_name(NetWriter *self, void **name) {
+    (void)self;
+    if (name) {
+        *name = 0;
+    }
+    return NET_E_NOTIMPL;
+}
+
+static HRESULT STDMETHODCALLTYPE net_writer_trust(NetWriter *self, int *level) {
+    (void)self;
+    if (level) {
+        *level = 0; /* BaseTrust */
+    }
+    return S_OK;
+}
+
+static HRESULT STDMETHODCALLTYPE net_writer_unstored(NetWriter *self, UINT32 *length) {
+    if (!length) {
+        return E_POINTER;
+    }
+    *length = (UINT32)self->data.size;
+    return S_OK;
+}
+
+static HRESULT STDMETHODCALLTYPE net_writer_get_encoding(NetWriter *self, int *value) {
+    if (!value) {
+        return E_POINTER;
+    }
+    *value = self->encoding;
+    return S_OK;
+}
+
+static HRESULT STDMETHODCALLTYPE net_writer_put_encoding(NetWriter *self, int value) {
+    self->encoding = value;
+    return S_OK;
+}
+
+static HRESULT STDMETHODCALLTYPE net_writer_get_order(NetWriter *self, int *value) {
+    if (!value) {
+        return E_POINTER;
+    }
+    *value = self->byte_order;
+    return S_OK;
+}
+
+static HRESULT STDMETHODCALLTYPE net_writer_put_order(NetWriter *self, int value) {
+    self->byte_order = value;
+    return S_OK;
+}
+
+static HRESULT net_writer_append(NetWriter *self, const void *data, size_t size) {
+    if (self->closed) {
+        return NET_RO_E_CLOSED;
+    }
+    if (size && !data) {
+        return E_POINTER;
+    }
+    return buffer_append(&self->data, data, size) ? S_OK : E_OUTOFMEMORY;
+}
+
+/* Integers in the writer's byte order. */
+static HRESULT net_writer_number(NetWriter *self, unsigned long long value, unsigned size) {
+    unsigned char bytes[8];
+    for (unsigned i = 0; i < size; ++i) {
+        unsigned shift = 8 * (self->byte_order ? size - 1 - i : i);
+        bytes[i] = (unsigned char)(value >> shift);
+    }
+    return net_writer_append(self, bytes, size);
+}
+
+static HRESULT STDMETHODCALLTYPE net_writer_byte(NetWriter *self, BYTE value) {
+    return net_writer_append(self, &value, 1);
+}
+
+static HRESULT STDMETHODCALLTYPE net_writer_bytes(NetWriter *self, UINT32 size, BYTE *data) {
+    return net_writer_append(self, data, size);
+}
+
+static HRESULT STDMETHODCALLTYPE net_writer_buffer_range(NetWriter *self, NetCom *buffer,
+                                                         UINT32 start, UINT32 count) {
+    BYTE *data;
+    UINT32 length;
+    if (!buffer) {
+        return E_POINTER;
+    }
+    if (!net_buffer_bytes(buffer, &data, &length)) {
+        return E_INVALIDARG;
+    }
+    if (start > length || count > length - start) {
+        return NET_E_BOUNDS;
+    }
+    return net_writer_append(self, data + start, count);
+}
+
+static HRESULT STDMETHODCALLTYPE net_writer_buffer(NetWriter *self, NetCom *buffer) {
+    BYTE *data;
+    UINT32 length;
+    if (!buffer) {
+        return E_POINTER;
+    }
+    if (!net_buffer_bytes(buffer, &data, &length)) {
+        return E_INVALIDARG;
+    }
+    return net_writer_append(self, data, length);
+}
+
+static HRESULT STDMETHODCALLTYPE net_writer_boolean(NetWriter *self, BYTE value) {
+    BYTE byte = value ? 1 : 0;
+    return net_writer_append(self, &byte, 1);
+}
+
+static HRESULT STDMETHODCALLTYPE net_writer_guid(NetWriter *self, GUID value) {
+    HRESULT result = net_writer_number(self, value.Data1, 4);
+    if (SUCCEEDED(result)) {
+        result = net_writer_number(self, value.Data2, 2);
+    }
+    if (SUCCEEDED(result)) {
+        result = net_writer_number(self, value.Data3, 2);
+    }
+    return SUCCEEDED(result) ? net_writer_append(self, value.Data4, 8) : result;
+}
+
+static HRESULT STDMETHODCALLTYPE net_writer_int16(NetWriter *self, INT16 value) {
+    return net_writer_number(self, (UINT16)value, 2);
+}
+
+static HRESULT STDMETHODCALLTYPE net_writer_int32(NetWriter *self, INT32 value) {
+    return net_writer_number(self, (UINT32)value, 4);
+}
+
+static HRESULT STDMETHODCALLTYPE net_writer_int64(NetWriter *self, INT64 value) {
+    return net_writer_number(self, (UINT64)value, 8);
+}
+
+static HRESULT STDMETHODCALLTYPE net_writer_uint16(NetWriter *self, UINT16 value) {
+    return net_writer_number(self, value, 2);
+}
+
+static HRESULT STDMETHODCALLTYPE net_writer_uint32(NetWriter *self, UINT32 value) {
+    return net_writer_number(self, value, 4);
+}
+
+static HRESULT STDMETHODCALLTYPE net_writer_uint64(NetWriter *self, UINT64 value) {
+    return net_writer_number(self, value, 8);
+}
+
+static HRESULT STDMETHODCALLTYPE net_writer_single(NetWriter *self, float value) {
+    UINT32 bits;
+    memory_copy(&bits, &value, sizeof(bits));
+    return net_writer_number(self, bits, 4);
+}
+
+static HRESULT STDMETHODCALLTYPE net_writer_double(NetWriter *self, double value) {
+    UINT64 bits;
+    memory_copy(&bits, &value, sizeof(bits));
+    return net_writer_number(self, bits, 8);
+}
+
+static HRESULT STDMETHODCALLTYPE net_writer_date(NetWriter *self, INT64 value) {
+    return net_writer_number(self, (UINT64)value, 8);
+}
+
+/* Azimuth's HSTRING: magic "FSH2", length, reserved, then the text pointer
+   (same layout net_trace_hstring reads). */
+static int net_writer_hstring(void *value, const wchar_t **text, unsigned *length) {
+    struct {
+        unsigned magic, length;
+        unsigned long long reserved;
+        const wchar_t *text;
+    } header;
+    *text = L"";
+    *length = 0;
+    if (!value) {
+        return 1;
+    }
+    if (!memory_read(value, &header, sizeof(header)) || header.magic != 0x32485346u) {
+        return 0;
+    }
+    *text = header.text;
+    *length = header.length;
+    return 1;
+}
+
+/* Encoding: 0 UTF-8, 1 UTF-16LE, 2 UTF-16BE. */
+static HRESULT net_writer_text(NetWriter *self, void *value, UINT32 *size, int store) {
+    const wchar_t *text;
+    unsigned length;
+    if (!size) {
+        return E_POINTER;
+    }
+    *size = 0;
+    if (!net_writer_hstring(value, &text, &length)) {
+        net_writer_log_once(&net_writer_logged,
+                            "WINRT: DataWriter got a string that is not an Azimuth HSTRING.\r\n");
+        return E_INVALIDARG;
+    }
+    if (!length) {
+        return S_OK;
+    }
+    if (self->encoding == 0) {
+        int bytes = WideCharToMultiByte(CP_UTF8, 0, text, (int)length, 0, 0, 0, 0);
+        if (bytes <= 0) {
+            return E_INVALIDARG;
+        }
+        *size = (UINT32)bytes;
+        if (!store) {
+            return S_OK;
+        }
+        if (self->closed) {
+            return NET_RO_E_CLOSED;
+        }
+        if (!buffer_reserve(&self->data, (size_t)bytes)) {
+            return E_OUTOFMEMORY;
+        }
+        WideCharToMultiByte(CP_UTF8, 0, text, (int)length,
+                            (char *)self->data.data + self->data.size, bytes, 0, 0);
+        self->data.size += (size_t)bytes;
+        self->data.data[self->data.size] = self->data.data[self->data.size + 1] = 0;
+        return S_OK;
+    }
+    *size = length * 2;
+    if (!store) {
+        return S_OK;
+    }
+    for (unsigned i = 0; i < length; ++i) {
+        unsigned char pair[2] = {(unsigned char)(text[i] & 0xff), (unsigned char)(text[i] >> 8)};
+        if (self->encoding == 2) {
+            unsigned char swap = pair[0];
+            pair[0] = pair[1];
+            pair[1] = swap;
+        }
+        HRESULT result = net_writer_append(self, pair, 2);
+        if (FAILED(result)) {
+            return result;
+        }
+    }
+    return S_OK;
+}
+
+static HRESULT STDMETHODCALLTYPE net_writer_string(NetWriter *self, void *value, UINT32 *size) {
+    return net_writer_text(self, value, size, 1);
+}
+
+static HRESULT STDMETHODCALLTYPE net_writer_measure(NetWriter *self, void *value, UINT32 *size) {
+    return net_writer_text(self, value, size, 0);
+}
+
+static HRESULT STDMETHODCALLTYPE net_writer_async(NetWriter *self, void **operation) {
+    (void)self;
+    if (operation) {
+        *operation = 0;
+    }
+    net_writer_log_once(&net_writer_logged,
+                        "WINRT: DataWriter Store/Flush/DetachStream called; not implemented.\r\n");
+    return NET_E_NOTIMPL;
+}
+
+static HRESULT STDMETHODCALLTYPE net_writer_detach(NetWriter *self, NetCom **buffer) {
+    if (!buffer) {
+        return E_POINTER;
+    }
+    *buffer = 0;
+    if (self->closed) {
+        return NET_RO_E_CLOSED;
+    }
+    HRESULT result = net_buffer_create(self->data.data, self->data.size, buffer);
+    if (SUCCEEDED(result)) {
+        buffer_free(&self->data);
+    }
+    return result;
+}
+
+static const NetWriterVtbl net_writer_vtable = {
+    net_writer_query,        net_writer_add_ref,      net_writer_release,
+    net_writer_iids,         net_writer_class_name,   net_writer_trust,
+    net_writer_unstored,     net_writer_get_encoding, net_writer_put_encoding,
+    net_writer_get_order,    net_writer_put_order,    net_writer_byte,
+    net_writer_bytes,        net_writer_buffer,       net_writer_buffer_range,
+    net_writer_boolean,      net_writer_guid,         net_writer_int16,
+    net_writer_int32,        net_writer_int64,        net_writer_uint16,
+    net_writer_uint32,       net_writer_uint64,       net_writer_single,
+    net_writer_double,       net_writer_date,         net_writer_date,
+    net_writer_string,       net_writer_measure,      net_writer_async,
+    net_writer_async,        net_writer_detach,       net_writer_async};
+
+static HRESULT STDMETHODCALLTYPE net_closable_query(NetWriterClosable *self, REFIID iid,
+                                                    void **out) {
+    return net_writer_query(net_writer_from_closable(self), iid, out);
+}
+
+static ULONG STDMETHODCALLTYPE net_closable_add_ref(NetWriterClosable *self) {
+    return net_writer_add_ref(net_writer_from_closable(self));
+}
+
+static ULONG STDMETHODCALLTYPE net_closable_release(NetWriterClosable *self) {
+    return net_writer_release(net_writer_from_closable(self));
+}
+
+static HRESULT STDMETHODCALLTYPE net_closable_iids(NetWriterClosable *self, ULONG *count,
+                                                   void **iids) {
+    return net_writer_iids(net_writer_from_closable(self), count, iids);
+}
+
+static HRESULT STDMETHODCALLTYPE net_closable_class_name(NetWriterClosable *self, void **name) {
+    return net_writer_class_name(net_writer_from_closable(self), name);
+}
+
+static HRESULT STDMETHODCALLTYPE net_closable_trust(NetWriterClosable *self, int *level) {
+    return net_writer_trust(net_writer_from_closable(self), level);
+}
+
+static HRESULT STDMETHODCALLTYPE net_closable_close(NetWriterClosable *self) {
+    NetWriter *writer = net_writer_from_closable(self);
+    writer->closed = 1;
+    buffer_free(&writer->data);
+    return S_OK;
+}
+
+static const NetWriterClosableVtbl net_closable_vtable = {
+    net_closable_query, net_closable_add_ref,    net_closable_release, net_closable_iids,
+    net_closable_class_name, net_closable_trust, net_closable_close};
+
+/* IActivationFactory that makes NetWriters; other interfaces (IDataWriterFactory)
+   are Azimuth's. */
+typedef struct NetWriterFactory NetWriterFactory;
+typedef struct {
+    HRESULT(STDMETHODCALLTYPE *QueryInterface)(NetWriterFactory *, REFIID, void **);
+    ULONG(STDMETHODCALLTYPE *AddRef)(NetWriterFactory *);
+    ULONG(STDMETHODCALLTYPE *Release)(NetWriterFactory *);
+    HRESULT(STDMETHODCALLTYPE *GetIids)(NetWriterFactory *, ULONG *, void **);
+    HRESULT(STDMETHODCALLTYPE *GetRuntimeClassName)(NetWriterFactory *, void **);
+    HRESULT(STDMETHODCALLTYPE *GetTrustLevel)(NetWriterFactory *, int *);
+    HRESULT(STDMETHODCALLTYPE *ActivateInstance)(NetWriterFactory *, NetWriter **);
+} NetWriterFactoryVtbl;
+struct NetWriterFactory {
+    const NetWriterFactoryVtbl *lpVtbl;
+    volatile LONG references;
+    NetCom *inner;
+};
+
+static HRESULT STDMETHODCALLTYPE net_wfactory_query(NetWriterFactory *self, REFIID iid,
+                                                    void **out) {
+    if (!out) {
+        return E_POINTER;
+    }
+    *out = 0;
+    if (memory_equal(iid, net_iid_unknown, 16) || memory_equal(iid, net_iid_inspectable, 16) ||
+        memory_equal(iid, net_iid_activation_factory, 16) || memory_equal(iid, net_iid_agile, 16)) {
+        *out = self;
+        InterlockedIncrement(&self->references);
+        return S_OK;
+    }
+    return self->inner ? self->inner->lpVtbl->QueryInterface(self->inner, iid, out)
+                       : E_NOINTERFACE;
+}
+
+static ULONG STDMETHODCALLTYPE net_wfactory_add_ref(NetWriterFactory *self) {
+    return (ULONG)InterlockedIncrement(&self->references);
+}
+
+static ULONG STDMETHODCALLTYPE net_wfactory_release(NetWriterFactory *self) {
+    LONG left = InterlockedDecrement(&self->references);
+    if (!left) {
+        if (self->inner) {
+            self->inner->lpVtbl->Release(self->inner);
+        }
+        net_free(self);
+    }
+    return (ULONG)left;
+}
+
+static HRESULT STDMETHODCALLTYPE net_wfactory_iids(NetWriterFactory *self, ULONG *count,
+                                                   void **iids) {
+    (void)self;
+    if (count) {
+        *count = 0;
+    }
+    if (iids) {
+        *iids = 0;
+    }
+    return S_OK;
+}
+
+static HRESULT STDMETHODCALLTYPE net_wfactory_class_name(NetWriterFactory *self, void **name) {
+    (void)self;
+    if (name) {
+        *name = 0;
+    }
+    return NET_E_NOTIMPL;
+}
+
+static HRESULT STDMETHODCALLTYPE net_wfactory_trust(NetWriterFactory *self, int *level) {
+    (void)self;
+    if (level) {
+        *level = 0;
+    }
+    return S_OK;
+}
+
+static HRESULT STDMETHODCALLTYPE net_wfactory_activate(NetWriterFactory *self, NetWriter **out) {
+    (void)self;
+    if (!out) {
+        return E_POINTER;
+    }
+    NetWriter *writer = net_alloc(sizeof(*writer));
+    *out = writer;
+    if (!writer) {
+        return E_OUTOFMEMORY;
+    }
+    writer->lpVtbl = &net_writer_vtable;
+    writer->closable.lpVtbl = &net_closable_vtable;
+    writer->references = 1;
+    writer->byte_order = 1; /* DataWriter's default is BigEndian */
+    return S_OK;
+}
+
+static const NetWriterFactoryVtbl net_wfactory_vtable = {
+    net_wfactory_query,      net_wfactory_add_ref, net_wfactory_release, net_wfactory_iids,
+    net_wfactory_class_name, net_wfactory_trust,   net_wfactory_activate};
+
+/* Writes 4 bytes with Azimuth's writer and detaches them. 1: they came back. */
+static int net_writer_self_test(NetCom *factory) {
+    static BYTE probe[4] = {'F', 'H', '2', '!'};
+    NetCom *instance = 0, *writer = 0, *buffer = 0;
+    UINT32 length = 0xffffffffu;
+    BYTE *data = 0;
+    HRESULT step = ((const NetActivationFactoryVtbl *)(const void *)factory->lpVtbl)
+                       ->ActivateInstance(factory, &instance);
+    if (SUCCEEDED(step) && instance) {
+        step = instance->lpVtbl->QueryInterface(instance, (REFIID)net_iid_data_writer,
+                                                (void **)&writer);
+    }
+    if (SUCCEEDED(step) && writer) {
+        step = writer->lpVtbl->WriteBytes(writer, sizeof(probe), probe);
+    }
+    if (SUCCEEDED(step) && writer) {
+        step = writer->lpVtbl->DetachBuffer(writer, &buffer);
+    }
+    int ok = SUCCEEDED(step) && buffer && net_buffer_bytes(buffer, &data, &length) &&
+             length == sizeof(probe) && memory_equal(data, probe, sizeof(probe));
+    Buffer line = {0};
+    if (buffer_append_text(&line, "WINRT: DataWriter self-test: Azimuth's writer ") &&
+        buffer_append_text(&line, ok ? "works" : "loses the bytes") &&
+        buffer_append_text(&line, " (step ") && buffer_append_hresult(&line, step) &&
+        buffer_append_text(&line, ", detached length ") &&
+        buffer_append_number(&line, buffer ? length : 0) &&
+        buffer_append_text(&line, ok ? ").\r\n" : "); using FH2Online's DataWriter.\r\n")) {
+        log_append((const char *)line.data);
+    }
+    buffer_free(&line);
+    if (buffer) {
+        buffer->lpVtbl->Release(buffer);
+    }
+    if (writer) {
+        writer->lpVtbl->Release(writer);
+    }
+    if (instance) {
+        instance->lpVtbl->Release(instance);
+    }
+    return ok;
+}
+
+/* Called with Azimuth's IActivationFactory for DataWriter; may swap it. */
+static void net_writer_filter(void **factory) {
+    AcquireSRWLockExclusive(&net_writer_lock);
+    int state = net_writer_state;
+    ReleaseSRWLockExclusive(&net_writer_lock);
+    if (!state) {
+        int works = net_writer_self_test((NetCom *)*factory);
+        AcquireSRWLockExclusive(&net_writer_lock);
+        if (!net_writer_state) {
+            net_writer_state = works ? 1 : 2;
+        }
+        state = net_writer_state;
+        ReleaseSRWLockExclusive(&net_writer_lock);
+    }
+    if (state != 2) {
+        return;
+    }
+    NetWriterFactory *ours = net_alloc(sizeof(*ours));
+    if (!ours) {
+        return;
+    }
+    ours->lpVtbl = &net_wfactory_vtable;
+    ours->references = 1;
+    ours->inner = (NetCom *)*factory; /* takes over the caller's reference */
+    *factory = ours;
+}
+
+static int net_wide_equal(const wchar_t *left, const wchar_t *right) {
+    while (*left && *left == *right) {
+        ++left;
+        ++right;
+    }
+    return *left == *right;
+}
+
+static HRESULT net_get_activation_factory(const wchar_t *name, const void *iid, void **out) {
+    if (!name || !out) {
+        return E_POINTER;
+    }
+    unsigned provider = 0;
+    HRESULT result = net_activate_raw(name, iid, out, &provider);
+    if (SUCCEEDED(result) && *out && iid && memory_equal(iid, net_iid_activation_factory, 16) &&
+        net_wide_equal(name, L"Windows.Storage.Streams.DataWriter")) {
+        net_writer_filter(out);
     }
     if (net_trace_first(name, result)) {
         Buffer line = {0};
@@ -1310,8 +2093,6 @@ static void net_trace_token(unsigned slot, void *method, void *url) {
 #define NET_CREATE_STRING_RVA 0x86110u
 typedef HRESULT (*NetCreateStringFn)(const wchar_t *, unsigned, void **);
 
-static const unsigned char net_iid_inspectable[16] = {0xe0, 0xe2, 0x86, 0xaf, 0x2d, 0xb1, 0x6a, 0x4c,
-                                                      0x9c, 0x5a, 0xd7, 0xaa, 0x65, 0x10, 0x1e, 0x90};
 static const unsigned char net_iid_async_info[16] = {0x36, 0, 0, 0, 0, 0, 0, 0,
                                                      0xc0, 0, 0, 0, 0, 0, 0, 0x46};
 /* IAsyncOperation<Windows.Xbox.System.GetTokenAndSignatureResult>, as Azimuth uses it. */
