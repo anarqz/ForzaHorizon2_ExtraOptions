@@ -2015,6 +2015,597 @@ static void net_writer_filter(void **factory) {
     *factory = ours;
 }
 
+/* ------------------------------------------------- DataReader replacement */
+/* Same story for the reader: XSAPI turns the detached buffer into the body
+   text with DataReader.FromBuffer(buffer).ReadString(length), and Azimuth's
+   generic DataReader hands back nothing. Strings are made with Azimuth's own
+   WindowsCreateString, so the rest of the process can read them. */
+
+static const unsigned char net_iid_data_reader[16] = {0x29, 0x00, 0xb5, 0xe2, 0xc1, 0xb4,
+                                                      0x14, 0x43, 0xa4, 0xb8, 0xfb, 0x81,
+                                                      0x3a, 0x2f, 0x27, 0x5e};
+static const unsigned char net_iid_data_reader_statics[16] = {0xc8, 0xbf, 0xfc, 0x11, 0x3a, 0xf9,
+                                                              0x1b, 0x47, 0xb1, 0x21, 0xf3, 0x79,
+                                                              0xe3, 0x49, 0x3c, 0x3c};
+#define NET_HSTRING_CREATE_RVA 0x86110u
+typedef HRESULT (*NetHstringCreateFn)(const wchar_t *, unsigned, void **);
+
+static int net_reader_state; /* 0 untested, 1 Azimuth's works, 2 replaced */
+
+typedef struct NetReader NetReader;
+typedef struct {
+    HRESULT(STDMETHODCALLTYPE *QueryInterface)(NetReader *, REFIID, void **);
+    ULONG(STDMETHODCALLTYPE *AddRef)(NetReader *);
+    ULONG(STDMETHODCALLTYPE *Release)(NetReader *);
+    HRESULT(STDMETHODCALLTYPE *GetIids)(NetReader *, ULONG *, void **);
+    HRESULT(STDMETHODCALLTYPE *GetRuntimeClassName)(NetReader *, void **);
+    HRESULT(STDMETHODCALLTYPE *GetTrustLevel)(NetReader *, int *);
+    HRESULT(STDMETHODCALLTYPE *get_UnconsumedBufferLength)(NetReader *, UINT32 *);
+    HRESULT(STDMETHODCALLTYPE *get_UnicodeEncoding)(NetReader *, int *);
+    HRESULT(STDMETHODCALLTYPE *put_UnicodeEncoding)(NetReader *, int);
+    HRESULT(STDMETHODCALLTYPE *get_ByteOrder)(NetReader *, int *);
+    HRESULT(STDMETHODCALLTYPE *put_ByteOrder)(NetReader *, int);
+    HRESULT(STDMETHODCALLTYPE *get_InputStreamOptions)(NetReader *, int *);
+    HRESULT(STDMETHODCALLTYPE *put_InputStreamOptions)(NetReader *, int);
+    HRESULT(STDMETHODCALLTYPE *ReadByte)(NetReader *, BYTE *);
+    HRESULT(STDMETHODCALLTYPE *ReadBytes)(NetReader *, UINT32, BYTE *);
+    HRESULT(STDMETHODCALLTYPE *ReadBuffer)(NetReader *, UINT32, NetCom **);
+    HRESULT(STDMETHODCALLTYPE *ReadBoolean)(NetReader *, BYTE *);
+    HRESULT(STDMETHODCALLTYPE *ReadGuid)(NetReader *, GUID *);
+    HRESULT(STDMETHODCALLTYPE *ReadInt16)(NetReader *, INT16 *);
+    HRESULT(STDMETHODCALLTYPE *ReadInt32)(NetReader *, INT32 *);
+    HRESULT(STDMETHODCALLTYPE *ReadInt64)(NetReader *, INT64 *);
+    HRESULT(STDMETHODCALLTYPE *ReadUInt16)(NetReader *, UINT16 *);
+    HRESULT(STDMETHODCALLTYPE *ReadUInt32)(NetReader *, UINT32 *);
+    HRESULT(STDMETHODCALLTYPE *ReadUInt64)(NetReader *, UINT64 *);
+    HRESULT(STDMETHODCALLTYPE *ReadSingle)(NetReader *, float *);
+    HRESULT(STDMETHODCALLTYPE *ReadDouble)(NetReader *, double *);
+    HRESULT(STDMETHODCALLTYPE *ReadString)(NetReader *, UINT32, void **);
+    HRESULT(STDMETHODCALLTYPE *ReadDateTime)(NetReader *, INT64 *);
+    HRESULT(STDMETHODCALLTYPE *ReadTimeSpan)(NetReader *, INT64 *);
+    HRESULT(STDMETHODCALLTYPE *LoadAsync)(NetReader *, UINT32, void **);
+    HRESULT(STDMETHODCALLTYPE *DetachBuffer)(NetReader *, NetCom **);
+    HRESULT(STDMETHODCALLTYPE *DetachStream)(NetReader *, void **);
+} NetReaderVtbl;
+struct NetReader {
+    const NetReaderVtbl *lpVtbl;
+    NetWriterClosable closable;
+    volatile LONG references;
+    int closed, byte_order, encoding, options;
+    Buffer data;
+    size_t position;
+};
+
+static NetReader *net_reader_from_closable(NetWriterClosable *closable) {
+    return (NetReader *)(void *)((unsigned char *)closable - offsetof(NetReader, closable));
+}
+
+static HRESULT STDMETHODCALLTYPE net_reader_query(NetReader *self, REFIID iid, void **out) {
+    if (!out) {
+        return E_POINTER;
+    }
+    *out = 0;
+    if (memory_equal(iid, net_iid_unknown, 16) || memory_equal(iid, net_iid_inspectable, 16) ||
+        memory_equal(iid, net_iid_data_reader, 16) || memory_equal(iid, net_iid_agile, 16)) {
+        *out = self;
+    } else if (memory_equal(iid, net_iid_closable, 16)) {
+        *out = &self->closable;
+    } else {
+        return E_NOINTERFACE;
+    }
+    InterlockedIncrement(&self->references);
+    return S_OK;
+}
+
+static ULONG STDMETHODCALLTYPE net_reader_add_ref(NetReader *self) {
+    return (ULONG)InterlockedIncrement(&self->references);
+}
+
+static ULONG STDMETHODCALLTYPE net_reader_release(NetReader *self) {
+    LONG left = InterlockedDecrement(&self->references);
+    if (!left) {
+        buffer_free(&self->data);
+        net_free(self);
+    }
+    return (ULONG)left;
+}
+
+static HRESULT STDMETHODCALLTYPE net_reader_iids(NetReader *self, ULONG *count, void **iids) {
+    (void)self;
+    if (count) {
+        *count = 0;
+    }
+    if (iids) {
+        *iids = 0;
+    }
+    return S_OK;
+}
+
+static HRESULT STDMETHODCALLTYPE net_reader_class_name(NetReader *self, void **name) {
+    (void)self;
+    if (name) {
+        *name = 0;
+    }
+    return NET_E_NOTIMPL;
+}
+
+static HRESULT STDMETHODCALLTYPE net_reader_trust(NetReader *self, int *level) {
+    (void)self;
+    if (level) {
+        *level = 0;
+    }
+    return S_OK;
+}
+
+static HRESULT STDMETHODCALLTYPE net_reader_unconsumed(NetReader *self, UINT32 *length) {
+    if (!length) {
+        return E_POINTER;
+    }
+    *length = (UINT32)(self->data.size - self->position);
+    return S_OK;
+}
+
+static HRESULT STDMETHODCALLTYPE net_reader_get_encoding(NetReader *self, int *value) {
+    if (!value) {
+        return E_POINTER;
+    }
+    *value = self->encoding;
+    return S_OK;
+}
+
+static HRESULT STDMETHODCALLTYPE net_reader_put_encoding(NetReader *self, int value) {
+    self->encoding = value;
+    return S_OK;
+}
+
+static HRESULT STDMETHODCALLTYPE net_reader_get_order(NetReader *self, int *value) {
+    if (!value) {
+        return E_POINTER;
+    }
+    *value = self->byte_order;
+    return S_OK;
+}
+
+static HRESULT STDMETHODCALLTYPE net_reader_put_order(NetReader *self, int value) {
+    self->byte_order = value;
+    return S_OK;
+}
+
+static HRESULT STDMETHODCALLTYPE net_reader_get_options(NetReader *self, int *value) {
+    if (!value) {
+        return E_POINTER;
+    }
+    *value = self->options;
+    return S_OK;
+}
+
+static HRESULT STDMETHODCALLTYPE net_reader_put_options(NetReader *self, int value) {
+    self->options = value;
+    return S_OK;
+}
+
+/* Next `size` bytes, or E_BOUNDS when the buffer is shorter. */
+static HRESULT net_reader_take(NetReader *self, size_t size, const unsigned char **data) {
+    if (self->closed) {
+        return NET_RO_E_CLOSED;
+    }
+    if (size > self->data.size - self->position) {
+        return NET_E_BOUNDS;
+    }
+    *data = self->data.data + self->position;
+    self->position += size;
+    return S_OK;
+}
+
+static HRESULT net_reader_number(NetReader *self, unsigned size, unsigned long long *value) {
+    const unsigned char *bytes;
+    HRESULT result = net_reader_take(self, size, &bytes);
+    *value = 0;
+    if (FAILED(result)) {
+        return result;
+    }
+    for (unsigned i = 0; i < size; ++i) {
+        unsigned shift = 8 * (self->byte_order ? size - 1 - i : i);
+        *value |= (unsigned long long)bytes[i] << shift;
+    }
+    return S_OK;
+}
+
+static HRESULT STDMETHODCALLTYPE net_reader_byte(NetReader *self, BYTE *value) {
+    const unsigned char *bytes;
+    if (!value) {
+        return E_POINTER;
+    }
+    HRESULT result = net_reader_take(self, 1, &bytes);
+    *value = SUCCEEDED(result) ? bytes[0] : 0;
+    return result;
+}
+
+static HRESULT STDMETHODCALLTYPE net_reader_bytes(NetReader *self, UINT32 size, BYTE *value) {
+    const unsigned char *bytes;
+    if (size && !value) {
+        return E_POINTER;
+    }
+    HRESULT result = net_reader_take(self, size, &bytes);
+    if (SUCCEEDED(result) && size) {
+        memory_copy(value, bytes, size);
+    }
+    return result;
+}
+
+static HRESULT STDMETHODCALLTYPE net_reader_buffer(NetReader *self, UINT32 size, NetCom **out) {
+    const unsigned char *bytes;
+    if (!out) {
+        return E_POINTER;
+    }
+    *out = 0;
+    HRESULT result = net_reader_take(self, size, &bytes);
+    return SUCCEEDED(result) ? net_buffer_create(bytes, size, out) : result;
+}
+
+static HRESULT STDMETHODCALLTYPE net_reader_boolean(NetReader *self, BYTE *value) {
+    HRESULT result = net_reader_byte(self, value);
+    if (SUCCEEDED(result)) {
+        *value = *value ? 1 : 0;
+    }
+    return result;
+}
+
+static HRESULT STDMETHODCALLTYPE net_reader_guid(NetReader *self, GUID *value) {
+    unsigned long long a, b, c;
+    const unsigned char *rest;
+    if (!value) {
+        return E_POINTER;
+    }
+    HRESULT result = net_reader_number(self, 4, &a);
+    if (SUCCEEDED(result)) {
+        result = net_reader_number(self, 2, &b);
+    }
+    if (SUCCEEDED(result)) {
+        result = net_reader_number(self, 2, &c);
+    }
+    if (SUCCEEDED(result)) {
+        result = net_reader_take(self, 8, &rest);
+    }
+    if (SUCCEEDED(result)) {
+        value->Data1 = (unsigned long)a;
+        value->Data2 = (unsigned short)b;
+        value->Data3 = (unsigned short)c;
+        memory_copy(value->Data4, rest, 8);
+    }
+    return result;
+}
+
+#define NET_READER_NUMBER(name, type, size)                                           \
+    static HRESULT STDMETHODCALLTYPE name(NetReader *self, type *value) {             \
+        unsigned long long raw;                                                       \
+        if (!value) {                                                                 \
+            return E_POINTER;                                                         \
+        }                                                                             \
+        HRESULT result = net_reader_number(self, size, &raw);                         \
+        if (SUCCEEDED(result)) {                                                      \
+            *value = (type)raw;                                                       \
+        }                                                                             \
+        return result;                                                                \
+    }
+NET_READER_NUMBER(net_reader_int16, INT16, 2)
+NET_READER_NUMBER(net_reader_int32, INT32, 4)
+NET_READER_NUMBER(net_reader_int64, INT64, 8)
+NET_READER_NUMBER(net_reader_uint16, UINT16, 2)
+NET_READER_NUMBER(net_reader_uint32, UINT32, 4)
+NET_READER_NUMBER(net_reader_uint64, UINT64, 8)
+
+static HRESULT STDMETHODCALLTYPE net_reader_single(NetReader *self, float *value) {
+    unsigned long long raw;
+    if (!value) {
+        return E_POINTER;
+    }
+    HRESULT result = net_reader_number(self, 4, &raw);
+    if (SUCCEEDED(result)) {
+        UINT32 bits = (UINT32)raw;
+        memory_copy(value, &bits, sizeof(bits));
+    }
+    return result;
+}
+
+static HRESULT STDMETHODCALLTYPE net_reader_double(NetReader *self, double *value) {
+    unsigned long long raw;
+    if (!value) {
+        return E_POINTER;
+    }
+    HRESULT result = net_reader_number(self, 8, &raw);
+    if (SUCCEEDED(result)) {
+        memory_copy(value, &raw, sizeof(raw));
+    }
+    return result;
+}
+
+/* count is in code units: bytes for UTF-8, wchar_t for UTF-16. */
+static HRESULT STDMETHODCALLTYPE net_reader_string(NetReader *self, UINT32 count, void **out) {
+    const unsigned char *bytes;
+    if (!out) {
+        return E_POINTER;
+    }
+    *out = 0;
+    size_t size = self->encoding ? (size_t)count * 2 : count;
+    HRESULT result = net_reader_take(self, size, &bytes);
+    if (FAILED(result)) {
+        return result;
+    }
+    NetHstringCreateFn create =
+        (NetHstringCreateFn)(uintptr_t)(net_azimuth_base + NET_HSTRING_CREATE_RVA);
+    if (!count) {
+        return create(L"", 0, out);
+    }
+    wchar_t *text;
+    int length;
+    if (self->encoding == 0) {
+        length = MultiByteToWideChar(CP_UTF8, 0, (const char *)bytes, (int)count, 0, 0);
+        if (length <= 0) {
+            return E_INVALIDARG;
+        }
+        text = net_alloc(((size_t)length + 1) * sizeof(wchar_t));
+        if (!text) {
+            return E_OUTOFMEMORY;
+        }
+        MultiByteToWideChar(CP_UTF8, 0, (const char *)bytes, (int)count, text, length);
+    } else {
+        length = (int)count;
+        text = net_alloc(((size_t)length + 1) * sizeof(wchar_t));
+        if (!text) {
+            return E_OUTOFMEMORY;
+        }
+        for (UINT32 i = 0; i < count; ++i) {
+            unsigned lo = bytes[2 * i], hi = bytes[2 * i + 1];
+            text[i] = (wchar_t)(self->encoding == 2 ? (lo << 8) | hi : (hi << 8) | lo);
+        }
+    }
+    result = create(text, (unsigned)length, out);
+    net_free(text);
+    return result;
+}
+
+static HRESULT STDMETHODCALLTYPE net_reader_date(NetReader *self, INT64 *value) {
+    return net_reader_int64(self, value);
+}
+
+static HRESULT STDMETHODCALLTYPE net_reader_load(NetReader *self, UINT32 count, void **operation) {
+    (void)self;
+    (void)count;
+    if (operation) {
+        *operation = 0;
+    }
+    net_writer_log_once(&net_writer_logged,
+                        "WINRT: DataReader LoadAsync/DetachStream called; not implemented.\r\n");
+    return NET_E_NOTIMPL;
+}
+
+static HRESULT STDMETHODCALLTYPE net_reader_detach(NetReader *self, NetCom **out) {
+    const unsigned char *bytes;
+    if (!out) {
+        return E_POINTER;
+    }
+    *out = 0;
+    size_t left = self->data.size - self->position;
+    HRESULT result = net_reader_take(self, left, &bytes);
+    return SUCCEEDED(result) ? net_buffer_create(bytes, left, out) : result;
+}
+
+static HRESULT STDMETHODCALLTYPE net_reader_detach_stream(NetReader *self, void **out) {
+    return net_reader_load(self, 0, out);
+}
+
+static const NetReaderVtbl net_reader_vtable = {
+    net_reader_query,        net_reader_add_ref,     net_reader_release,
+    net_reader_iids,         net_reader_class_name,  net_reader_trust,
+    net_reader_unconsumed,   net_reader_get_encoding, net_reader_put_encoding,
+    net_reader_get_order,    net_reader_put_order,   net_reader_get_options,
+    net_reader_put_options,  net_reader_byte,        net_reader_bytes,
+    net_reader_buffer,       net_reader_boolean,     net_reader_guid,
+    net_reader_int16,        net_reader_int32,       net_reader_int64,
+    net_reader_uint16,       net_reader_uint32,      net_reader_uint64,
+    net_reader_single,       net_reader_double,      net_reader_string,
+    net_reader_date,         net_reader_date,        net_reader_load,
+    net_reader_detach,       net_reader_detach_stream};
+
+static HRESULT STDMETHODCALLTYPE net_rclosable_query(NetWriterClosable *self, REFIID iid,
+                                                     void **out) {
+    return net_reader_query(net_reader_from_closable(self), iid, out);
+}
+
+static ULONG STDMETHODCALLTYPE net_rclosable_add_ref(NetWriterClosable *self) {
+    return net_reader_add_ref(net_reader_from_closable(self));
+}
+
+static ULONG STDMETHODCALLTYPE net_rclosable_release(NetWriterClosable *self) {
+    return net_reader_release(net_reader_from_closable(self));
+}
+
+static HRESULT STDMETHODCALLTYPE net_rclosable_close(NetWriterClosable *self) {
+    NetReader *reader = net_reader_from_closable(self);
+    reader->closed = 1;
+    buffer_free(&reader->data);
+    reader->position = 0;
+    return S_OK;
+}
+
+static const NetWriterClosableVtbl net_rclosable_vtable = {
+    net_rclosable_query,     net_rclosable_add_ref, net_rclosable_release, net_closable_iids,
+    net_closable_class_name, net_closable_trust,    net_rclosable_close};
+
+/* IDataReaderStatics: FromBuffer makes NetReaders over a copy of the bytes. */
+typedef struct NetReaderStatics NetReaderStatics;
+typedef struct {
+    HRESULT(STDMETHODCALLTYPE *QueryInterface)(NetReaderStatics *, REFIID, void **);
+    ULONG(STDMETHODCALLTYPE *AddRef)(NetReaderStatics *);
+    ULONG(STDMETHODCALLTYPE *Release)(NetReaderStatics *);
+    HRESULT(STDMETHODCALLTYPE *GetIids)(NetReaderStatics *, ULONG *, void **);
+    HRESULT(STDMETHODCALLTYPE *GetRuntimeClassName)(NetReaderStatics *, void **);
+    HRESULT(STDMETHODCALLTYPE *GetTrustLevel)(NetReaderStatics *, int *);
+    HRESULT(STDMETHODCALLTYPE *FromBuffer)(NetReaderStatics *, NetCom *, NetCom **);
+} NetReaderStaticsVtbl;
+struct NetReaderStatics {
+    const NetReaderStaticsVtbl *lpVtbl;
+    volatile LONG references;
+    NetCom *inner;
+};
+
+static HRESULT STDMETHODCALLTYPE net_rstatics_query(NetReaderStatics *self, REFIID iid,
+                                                    void **out) {
+    if (!out) {
+        return E_POINTER;
+    }
+    *out = 0;
+    if (memory_equal(iid, net_iid_unknown, 16) || memory_equal(iid, net_iid_inspectable, 16) ||
+        memory_equal(iid, net_iid_data_reader_statics, 16) || memory_equal(iid, net_iid_agile, 16)) {
+        *out = self;
+        InterlockedIncrement(&self->references);
+        return S_OK;
+    }
+    return self->inner ? self->inner->lpVtbl->QueryInterface(self->inner, iid, out)
+                       : E_NOINTERFACE;
+}
+
+static ULONG STDMETHODCALLTYPE net_rstatics_add_ref(NetReaderStatics *self) {
+    return (ULONG)InterlockedIncrement(&self->references);
+}
+
+static ULONG STDMETHODCALLTYPE net_rstatics_release(NetReaderStatics *self) {
+    LONG left = InterlockedDecrement(&self->references);
+    if (!left) {
+        if (self->inner) {
+            self->inner->lpVtbl->Release(self->inner);
+        }
+        net_free(self);
+    }
+    return (ULONG)left;
+}
+
+static HRESULT STDMETHODCALLTYPE net_rstatics_iids(NetReaderStatics *self, ULONG *count,
+                                                   void **iids) {
+    (void)self;
+    if (count) {
+        *count = 0;
+    }
+    if (iids) {
+        *iids = 0;
+    }
+    return S_OK;
+}
+
+static HRESULT STDMETHODCALLTYPE net_rstatics_class_name(NetReaderStatics *self, void **name) {
+    (void)self;
+    if (name) {
+        *name = 0;
+    }
+    return NET_E_NOTIMPL;
+}
+
+static HRESULT STDMETHODCALLTYPE net_rstatics_trust(NetReaderStatics *self, int *level) {
+    (void)self;
+    if (level) {
+        *level = 0;
+    }
+    return S_OK;
+}
+
+static HRESULT STDMETHODCALLTYPE net_rstatics_from_buffer(NetReaderStatics *self, NetCom *buffer,
+                                                          NetCom **out) {
+    BYTE *data;
+    UINT32 length;
+    (void)self;
+    if (!out) {
+        return E_POINTER;
+    }
+    *out = 0;
+    if (!buffer) {
+        return E_INVALIDARG;
+    }
+    if (!net_buffer_bytes(buffer, &data, &length)) {
+        return E_INVALIDARG;
+    }
+    NetReader *reader = net_alloc(sizeof(*reader));
+    if (!reader) {
+        return E_OUTOFMEMORY;
+    }
+    reader->lpVtbl = &net_reader_vtable;
+    reader->closable.lpVtbl = &net_rclosable_vtable;
+    reader->references = 1;
+    reader->byte_order = 1; /* DataReader's default is BigEndian */
+    if (length && !buffer_append(&reader->data, data, length)) {
+        net_free(reader);
+        return E_OUTOFMEMORY;
+    }
+    *out = (NetCom *)(void *)reader;
+    return S_OK;
+}
+
+static const NetReaderStaticsVtbl net_rstatics_vtable = {
+    net_rstatics_query,      net_rstatics_add_ref, net_rstatics_release, net_rstatics_iids,
+    net_rstatics_class_name, net_rstatics_trust,   net_rstatics_from_buffer};
+
+/* Reads "FH2!" back through Azimuth's reader. 1: the string came back. */
+static int net_reader_self_test(NetCom *statics) {
+    static const unsigned char probe[4] = {'F', 'H', '2', '!'};
+    NetCom *buffer = 0, *reader = 0;
+    void *text = 0;
+    const wchar_t *chars = L"";
+    unsigned length = 0;
+    HRESULT step = net_buffer_create(probe, sizeof(probe), &buffer);
+    if (SUCCEEDED(step)) {
+        step = ((const NetReaderStaticsVtbl *)(const void *)statics->lpVtbl)
+                   ->FromBuffer((NetReaderStatics *)(void *)statics, buffer, &reader);
+    }
+    if (SUCCEEDED(step) && reader) {
+        step = ((const NetReaderVtbl *)(const void *)reader->lpVtbl)
+                   ->ReadString((NetReader *)(void *)reader, sizeof(probe), &text);
+    }
+    int ok = SUCCEEDED(step) && text && net_writer_hstring(text, &chars, &length) &&
+             length == 4 && chars[0] == L'F' && chars[3] == L'!';
+    Buffer line = {0};
+    if (buffer_append_text(&line, "WINRT: DataReader self-test: Azimuth's reader ") &&
+        buffer_append_text(&line, ok ? "works" : "loses the text") &&
+        buffer_append_text(&line, " (step ") && buffer_append_hresult(&line, step) &&
+        buffer_append_text(&line, ", string length ") && buffer_append_number(&line, length) &&
+        buffer_append_text(&line, ok ? ").\r\n" : "); using FH2Online's DataReader.\r\n")) {
+        log_append((const char *)line.data);
+    }
+    buffer_free(&line);
+    if (reader) {
+        reader->lpVtbl->Release(reader);
+    }
+    if (buffer) {
+        buffer->lpVtbl->Release(buffer);
+    }
+    return ok; /* the probe HSTRING is leaked once: Azimuth's delete is not mapped */
+}
+
+static void net_reader_filter(void **statics) {
+    AcquireSRWLockExclusive(&net_writer_lock);
+    int state = net_reader_state;
+    ReleaseSRWLockExclusive(&net_writer_lock);
+    if (!state) {
+        int works = net_reader_self_test((NetCom *)*statics);
+        AcquireSRWLockExclusive(&net_writer_lock);
+        if (!net_reader_state) {
+            net_reader_state = works ? 1 : 2;
+        }
+        state = net_reader_state;
+        ReleaseSRWLockExclusive(&net_writer_lock);
+    }
+    if (state != 2) {
+        return;
+    }
+    NetReaderStatics *ours = net_alloc(sizeof(*ours));
+    if (!ours) {
+        return;
+    }
+    ours->lpVtbl = &net_rstatics_vtable;
+    ours->references = 1;
+    ours->inner = (NetCom *)*statics;
+    *statics = ours;
+}
+
 static int net_wide_equal(const wchar_t *left, const wchar_t *right) {
     while (*left && *left == *right) {
         ++left;
@@ -2032,6 +2623,10 @@ static HRESULT net_get_activation_factory(const wchar_t *name, const void *iid, 
     if (SUCCEEDED(result) && *out && iid && memory_equal(iid, net_iid_activation_factory, 16) &&
         net_wide_equal(name, L"Windows.Storage.Streams.DataWriter")) {
         net_writer_filter(out);
+    }
+    if (SUCCEEDED(result) && *out && iid && memory_equal(iid, net_iid_data_reader_statics, 16) &&
+        net_wide_equal(name, L"Windows.Storage.Streams.DataReader")) {
+        net_reader_filter(out);
     }
     if (net_trace_first(name, result)) {
         Buffer line = {0};

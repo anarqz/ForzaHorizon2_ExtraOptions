@@ -6,7 +6,7 @@
 #include <stddef.h>
 
 #define MOD_NAME "Forza Horizon 2 Extra Options"
-#define MOD_VERSION "0.2.34+fh2online.6"
+#define MOD_VERSION "0.2.34+fh2online.7"
 #define MOD_INI_NAME L"FH2_ExtraOptions.ini"
 #define MOD_LOG_NAME L"FH2_ExtraOptions.log"
 #define GAME_EXE_NAME L"forza_durango_release_final.exe"
