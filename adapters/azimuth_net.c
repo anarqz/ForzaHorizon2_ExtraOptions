@@ -471,7 +471,7 @@ typedef struct {
 
 struct NetRequest {
     const NetRequestVtbl *lpVtbl;
-    volatile LONG references, sent, aborted;
+    volatile LONG references, sent, aborted, opened;
     LONG id;
     DWORD timeout_ms;
     Buffer method, url, request_headers, request_body;
@@ -536,10 +536,11 @@ static HRESULT STDMETHODCALLTYPE net_request_open(NetRequest *self, const WCHAR 
     if (!method || !url || !callback) {
         return E_INVALIDARG;
     }
-    if (self->sent || self->callback) {
+    if (self->sent || InterlockedCompareExchange(&self->opened, 1, 0)) {
         return NET_UNEXPECTED;
     }
     if (!buffer_append_wide(&self->method, method) || !buffer_append_wide(&self->url, url)) {
+        InterlockedExchange(&self->opened, 0);
         return E_OUTOFMEMORY;
     }
     callback->lpVtbl->AddRef(callback);
@@ -564,7 +565,13 @@ static HRESULT STDMETHODCALLTYPE net_request_set_header(NetRequest *self, const 
 static int net_read_body(NetRequest *request, SequentialStream *body, ULONGLONG size) {
     unsigned char chunk[2048];
     ULONGLONG total = 0;
-    while (body && (!size || total < size) && request->request_body.size < NET_MAX_BODY) {
+    if (!body || !size) {
+        return 1; /* XHR2: size 0 means no body. */
+    }
+    if (size > NET_MAX_BODY) {
+        return 0;
+    }
+    while (total < size) {
         ULONG want = sizeof(chunk), got = 0;
         if (size && size - total < want) {
             want = (ULONG)(size - total);
@@ -638,7 +645,7 @@ static void net_capture(NetRequest *request, int answered, HRESULT error) {
 /* Headers WinHTTP manages itself are logged but not forwarded. */
 static int net_header_is_forwarded(const wchar_t *line, size_t length) {
     static const wchar_t *const skipped[] = {L"host:", L"content-length:", L"connection:",
-                                             L"transfer-encoding:"};
+                                             L"transfer-encoding:", L"accept-encoding:"};
     for (size_t i = 0; i < ARRAY_COUNT(skipped); ++i) {
         if (wide_starts_ignore_case(line, length, skipped[i])) {
             return 0;
@@ -721,9 +728,25 @@ static int net_forward(NetRequest *request, HRESULT *error) {
                                           buffer_wide(&path), NULL, WINHTTP_NO_REFERER,
                                           WINHTTP_DEFAULT_ACCEPT_TYPES, 0)
                       : 0;
-    if (!http || !http_add_headers(http, buffer_wide(&headers), (DWORD)-1L,
-                                   WINHTTP_ADDREQ_FLAG_ADD)) {
+    if (!http) {
         goto done;
+    }
+    /* One header per call: a single odd line must not sink the whole request. */
+    for (const wchar_t *line = buffer_wide(&headers); *line;) {
+        size_t length = 0;
+        while (line[length] && line[length] != L'\n') {
+            ++length;
+        }
+        size_t taken = line[length] ? length + 1 : length;
+        size_t trimmed = length;
+        while (trimmed && (line[trimmed - 1] == L'\r' || line[trimmed - 1] == L' ')) {
+            --trimmed;
+        }
+        if (trimmed && !http_add_headers(http, line, (DWORD)trimmed,
+                                         WINHTTP_ADDREQ_FLAG_ADD | WINHTTP_ADDREQ_FLAG_REPLACE)) {
+            log_append("NETWORK: WinHTTP rejected one forwarded request header.\r\n");
+        }
+        line += taken;
     }
     DWORD body_size = (DWORD)request->request_body.size;
     if (!http_send(http, WINHTTP_NO_ADDITIONAL_HEADERS, 0,
@@ -758,14 +781,22 @@ static int net_forward(NetRequest *request, HRESULT *error) {
     }
     for (;;) {
         DWORD available = 0, read = 0;
-        if (!http_query_available(http, &available) || !available) {
+        if (!http_query_available(http, &available)) {
+            *error = HRESULT_FROM_WIN32(GetLastError());
+            goto done;
+        }
+        if (!available) {
             break;
         }
         if (request->response_body.size + available > NET_MAX_BODY ||
-            !buffer_reserve(&request->response_body, available) ||
-            !http_read(http, request->response_body.data + request->response_body.size, available,
+            !buffer_reserve(&request->response_body, available)) {
+            *error = E_OUTOFMEMORY;
+            goto done;
+        }
+        if (!http_read(http, request->response_body.data + request->response_body.size, available,
                        &read)) {
-            break;
+            *error = HRESULT_FROM_WIN32(GetLastError());
+            goto done;
         }
         request->response_body.size += read;
         request->response_body.data[request->response_body.size] = 0;
@@ -787,13 +818,32 @@ done:
     return answered;
 }
 
+static int net_write_all(SequentialStream *stream, const unsigned char *data, size_t size) {
+    while (size) {
+        ULONG chunk = size > 0x40000000u ? 0x40000000u : (ULONG)size, written = 0;
+        HRESULT result = stream->lpVtbl->Write(stream, data, chunk, &written);
+        if (FAILED(result) || !written || written > chunk) {
+            return 0;
+        }
+        data += written;
+        size -= written;
+    }
+    return 1;
+}
+
 static DWORD WINAPI net_worker(void *parameter) {
     NetRequest *request = parameter;
     HRESULT error = NET_OFFLINE_ERROR;
     int answered = net_mode == NET_MODE_PROXY && !request->aborted && net_forward(request, &error);
+    if (request->aborted) {
+        answered = 0;
+        error = E_ABORT;
+    }
     net_capture(request, answered, error);
-    XhrCallback *callback = request->callback;
-    if (!request->aborted && callback) {
+    /* Take the callback out of the request: msxml6 drops it after the final
+       notification, and XSAPI's callback owns the request (cycle otherwise). */
+    XhrCallback *callback = InterlockedExchangePointer((void *volatile *)&request->callback, NULL);
+    if (callback) {
         if (!answered) {
             callback->lpVtbl->OnError(callback, request, error);
         } else {
@@ -801,12 +851,13 @@ static DWORD WINAPI net_worker(void *parameter) {
                                                  buffer_wide(&request->status_text));
             if (request->custom_stream) {
                 SequentialStream *custom = request->custom_stream;
-                ULONG written = 0;
-                if (request->response_body.size) {
-                    custom->lpVtbl->Write(custom, request->response_body.data,
-                                          (ULONG)request->response_body.size, &written);
+                if (!net_write_all(custom, request->response_body.data,
+                                   request->response_body.size)) {
+                    callback->lpVtbl->OnError(callback, request, E_FAIL);
+                } else {
+                    callback->lpVtbl->OnDataAvailable(callback, request, custom);
+                    callback->lpVtbl->OnResponseReceived(callback, request, custom);
                 }
-                callback->lpVtbl->OnResponseReceived(callback, request, custom);
             } else {
                 SequentialStream *stream = memory_stream_create(&request->response_body);
                 if (!stream) {
@@ -818,6 +869,7 @@ static DWORD WINAPI net_worker(void *parameter) {
                 }
             }
         }
+        callback->lpVtbl->Release(callback);
     }
     net_request_release(request);
     return 0;
@@ -825,7 +877,7 @@ static DWORD WINAPI net_worker(void *parameter) {
 
 static HRESULT STDMETHODCALLTYPE net_request_send(NetRequest *self, SequentialStream *body,
                                                   ULONGLONG size) {
-    if (!self->callback) {
+    if (!self->opened || !self->callback) {
         return NET_UNEXPECTED;
     }
     if (InterlockedCompareExchange(&self->sent, 1, 0)) {
