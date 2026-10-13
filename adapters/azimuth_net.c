@@ -1301,18 +1301,333 @@ static void net_trace_token(unsigned slot, void *method, void *url) {
     net_trace_line(&line);
 }
 
-#define NET_TOKEN_THUNK(n)                                                                      \
+/* ------------------------------------------------------------- fake token */
+/* Azimuth's User.GetTokenAndSignature* always fails (ERROR_NETWORK_UNREACHABLE),
+   so XSAPI and the game never build a request. Instead, hand back a completed
+   IAsyncOperation<GetTokenAndSignatureResult>. The result's two string getters
+   return distinguishable values so a capture shows which one is the token. */
+
+#define NET_CREATE_STRING_RVA 0x86110u
+typedef HRESULT (*NetCreateStringFn)(const wchar_t *, unsigned, void **);
+
+static const unsigned char net_iid_inspectable[16] = {0xe0, 0xe2, 0x86, 0xaf, 0x2d, 0xb1, 0x6a, 0x4c,
+                                                      0x9c, 0x5a, 0xd7, 0xaa, 0x65, 0x10, 0x1e, 0x90};
+static const unsigned char net_iid_async_info[16] = {0x36, 0, 0, 0, 0, 0, 0, 0,
+                                                     0xc0, 0, 0, 0, 0, 0, 0, 0x46};
+/* IAsyncOperation<Windows.Xbox.System.GetTokenAndSignatureResult>, as Azimuth uses it. */
+static const unsigned char net_iid_token_operation[16] = {0xb1, 0xe9, 0xc6, 0xe6, 0x3d, 0x36,
+                                                          0xfe, 0x54, 0x80, 0x8b, 0x89, 0xda,
+                                                          0x6b, 0xcf, 0x78, 0xbf};
+static const unsigned char net_iid_no_marshal[16] = {0x1b, 0x69, 0xc8, 0xec, 0xdb, 0xc1, 0xc0, 0x4d,
+                                                     0x85, 0x5e, 0x65, 0xf6, 0xc5, 0x51, 0xaf, 0x49};
+static volatile LONG net_token_ids, net_logged_result_iid, net_logged_operation_iid;
+
+static void net_log_iid_once(volatile LONG *flag, const char *prefix, const void *iid) {
+    if (!InterlockedCompareExchange(flag, 1, 0)) {
+        net_log_guid(prefix, (const unsigned char *)iid);
+    }
+}
+
+static int net_is_classic_com_iid(const unsigned char *iid) {
+    static const unsigned char tail[8] = {0xc0, 0, 0, 0, 0, 0, 0, 0x46};
+    return memory_equal(iid + 8, tail, 8) && iid[4] == 0 && iid[5] == 0 && iid[6] == 0 &&
+           iid[7] == 0;
+}
+
+/* -- result object */
+typedef struct NetTokenResult NetTokenResult;
+typedef struct {
+    HRESULT(STDMETHODCALLTYPE *QueryInterface)(NetTokenResult *, REFIID, void **);
+    ULONG(STDMETHODCALLTYPE *AddRef)(NetTokenResult *);
+    ULONG(STDMETHODCALLTYPE *Release)(NetTokenResult *);
+    HRESULT(STDMETHODCALLTYPE *GetIids)(NetTokenResult *, ULONG *, void **);
+    HRESULT(STDMETHODCALLTYPE *GetRuntimeClassName)(NetTokenResult *, void **);
+    HRESULT(STDMETHODCALLTYPE *GetTrustLevel)(NetTokenResult *, int *);
+    HRESULT(STDMETHODCALLTYPE *Getter[6])(NetTokenResult *, void **);
+} NetTokenResultVtbl;
+struct NetTokenResult {
+    const NetTokenResultVtbl *lpVtbl;
+    volatile LONG references;
+};
+
+static HRESULT STDMETHODCALLTYPE net_result_query(NetTokenResult *self, REFIID iid, void **out) {
+    if (!out) {
+        return E_POINTER;
+    }
+    *out = 0;
+    const unsigned char *id = (const unsigned char *)iid;
+    /* Classic COM interfaces (IMarshal, IWeakReferenceSource, ...) other than
+       IUnknown, and INoMarshal, are refused. Anything else is taken to be the
+       result's own interface, whose IID this build does not know. */
+    if ((net_is_classic_com_iid(id) && !memory_equal(id, net_iid_unknown, 16)) ||
+        memory_equal(id, net_iid_no_marshal, 16)) {
+        return E_NOINTERFACE;
+    }
+    if (!memory_equal(id, net_iid_unknown, 16) && !memory_equal(id, net_iid_inspectable, 16) &&
+        !memory_equal(id, net_iid_agile, 16)) {
+        net_log_iid_once(&net_logged_result_iid, "XBL: token result asked for interface ", iid);
+    }
+    InterlockedIncrement(&self->references);
+    *out = self;
+    return S_OK;
+}
+static ULONG STDMETHODCALLTYPE net_result_add_ref(NetTokenResult *self) {
+    return (ULONG)InterlockedIncrement(&self->references);
+}
+static ULONG STDMETHODCALLTYPE net_result_release(NetTokenResult *self) {
+    LONG left = InterlockedDecrement(&self->references);
+    if (!left) {
+        net_free(self);
+    }
+    return (ULONG)left;
+}
+static HRESULT STDMETHODCALLTYPE net_inspectable_iids(void *self, ULONG *count, void **iids) {
+    (void)self;
+    if (count) {
+        *count = 0;
+    }
+    if (iids) {
+        *iids = 0;
+    }
+    return S_OK;
+}
+static HRESULT STDMETHODCALLTYPE net_inspectable_name(void *self, void **name) {
+    (void)self;
+    if (name) {
+        *name = 0;
+    }
+    return S_OK;
+}
+static HRESULT STDMETHODCALLTYPE net_inspectable_trust(void *self, int *level) {
+    (void)self;
+    if (level) {
+        *level = 0;
+    }
+    return S_OK;
+}
+static HRESULT net_make_hstring(const wchar_t *text, void **out) {
+    if (!out) {
+        return E_POINTER;
+    }
+    NetCreateStringFn create = (NetCreateStringFn)(uintptr_t)(net_azimuth_base + NET_CREATE_STRING_RVA);
+    return create(text, (unsigned)wide_length(text), out);
+}
+static HRESULT STDMETHODCALLTYPE net_result_get_0(NetTokenResult *self, void **out) {
+    (void)self;
+    return net_make_hstring(L"XBL3.0 x=1;fh2online-getter-0", out);
+}
+static HRESULT STDMETHODCALLTYPE net_result_get_1(NetTokenResult *self, void **out) {
+    (void)self;
+    return net_make_hstring(L"fh2online-getter-1", out);
+}
+static HRESULT STDMETHODCALLTYPE net_result_unknown(NetTokenResult *self, void **out) {
+    (void)self;
+    (void)out;
+    log_append("XBL: token result: a getter past the first two was called.\r\n");
+    return E_NOTIMPL;
+}
+static const NetTokenResultVtbl net_result_vtable = {
+    net_result_query,
+    net_result_add_ref,
+    net_result_release,
+    (HRESULT(STDMETHODCALLTYPE *)(NetTokenResult *, ULONG *, void **))net_inspectable_iids,
+    (HRESULT(STDMETHODCALLTYPE *)(NetTokenResult *, void **))net_inspectable_name,
+    (HRESULT(STDMETHODCALLTYPE *)(NetTokenResult *, int *))net_inspectable_trust,
+    {net_result_get_0, net_result_get_1, net_result_unknown, net_result_unknown, net_result_unknown,
+     net_result_unknown}};
+
+/* -- completed async operation: IAsyncOperation<T> at +0, IAsyncInfo at +8 */
+typedef struct NetTokenOperation NetTokenOperation;
+typedef struct NetCompletedHandler NetCompletedHandler;
+typedef struct {
+    HRESULT(STDMETHODCALLTYPE *QueryInterface)(NetCompletedHandler *, REFIID, void **);
+    ULONG(STDMETHODCALLTYPE *AddRef)(NetCompletedHandler *);
+    ULONG(STDMETHODCALLTYPE *Release)(NetCompletedHandler *);
+    HRESULT(STDMETHODCALLTYPE *Invoke)(NetCompletedHandler *, NetTokenOperation *, int);
+} NetCompletedHandlerVtbl;
+struct NetCompletedHandler {
+    const NetCompletedHandlerVtbl *lpVtbl;
+};
+typedef struct {
+    HRESULT(STDMETHODCALLTYPE *QueryInterface)(void *, REFIID, void **);
+    ULONG(STDMETHODCALLTYPE *AddRef)(void *);
+    ULONG(STDMETHODCALLTYPE *Release)(void *);
+    HRESULT(STDMETHODCALLTYPE *GetIids)(void *, ULONG *, void **);
+    HRESULT(STDMETHODCALLTYPE *GetRuntimeClassName)(void *, void **);
+    HRESULT(STDMETHODCALLTYPE *GetTrustLevel)(void *, int *);
+    HRESULT(STDMETHODCALLTYPE *PutCompleted)(void *, NetCompletedHandler *);
+    HRESULT(STDMETHODCALLTYPE *GetCompleted)(void *, NetCompletedHandler **);
+    HRESULT(STDMETHODCALLTYPE *GetResults)(void *, NetTokenResult **);
+} NetTokenOperationVtbl;
+typedef struct {
+    HRESULT(STDMETHODCALLTYPE *QueryInterface)(void *, REFIID, void **);
+    ULONG(STDMETHODCALLTYPE *AddRef)(void *);
+    ULONG(STDMETHODCALLTYPE *Release)(void *);
+    HRESULT(STDMETHODCALLTYPE *GetIids)(void *, ULONG *, void **);
+    HRESULT(STDMETHODCALLTYPE *GetRuntimeClassName)(void *, void **);
+    HRESULT(STDMETHODCALLTYPE *GetTrustLevel)(void *, int *);
+    HRESULT(STDMETHODCALLTYPE *GetId)(void *, unsigned *);
+    HRESULT(STDMETHODCALLTYPE *GetStatus)(void *, int *);
+    HRESULT(STDMETHODCALLTYPE *GetErrorCode)(void *, HRESULT *);
+    HRESULT(STDMETHODCALLTYPE *Cancel)(void *);
+    HRESULT(STDMETHODCALLTYPE *Close)(void *);
+} NetAsyncInfoVtbl;
+struct NetTokenOperation {
+    const NetTokenOperationVtbl *operation;
+    const NetAsyncInfoVtbl *info;
+    volatile LONG references, handler_set;
+    unsigned id;
+    NetTokenResult *result;
+    NetCompletedHandler *handler;
+};
+
+static NetTokenOperation *net_op_from(void *self, int info) {
+    return (NetTokenOperation *)((unsigned char *)self - (info ? sizeof(void *) : 0));
+}
+static HRESULT net_op_query(NetTokenOperation *op, REFIID iid, void **out) {
+    if (!out) {
+        return E_POINTER;
+    }
+    *out = 0;
+    if (memory_equal(iid, net_iid_unknown, 16) || memory_equal(iid, net_iid_inspectable, 16) ||
+        memory_equal(iid, net_iid_agile, 16) || memory_equal(iid, net_iid_token_operation, 16)) {
+        *out = &op->operation;
+    } else if (memory_equal(iid, net_iid_async_info, 16)) {
+        *out = &op->info;
+    } else {
+        net_log_iid_once(&net_logged_operation_iid, "XBL: token operation refused interface ", iid);
+        return E_NOINTERFACE;
+    }
+    InterlockedIncrement(&op->references);
+    return S_OK;
+}
+static ULONG net_op_add_ref(NetTokenOperation *op) {
+    return (ULONG)InterlockedIncrement(&op->references);
+}
+static ULONG net_op_release(NetTokenOperation *op) {
+    LONG left = InterlockedDecrement(&op->references);
+    if (!left) {
+        if (op->handler) {
+            op->handler->lpVtbl->Release(op->handler);
+        }
+        op->result->lpVtbl->Release(op->result);
+        net_free(op);
+    }
+    return (ULONG)left;
+}
+static HRESULT STDMETHODCALLTYPE net_opa_query(void *s, REFIID i, void **o) { return net_op_query(net_op_from(s, 0), i, o); }
+static ULONG STDMETHODCALLTYPE net_opa_add_ref(void *s) { return net_op_add_ref(net_op_from(s, 0)); }
+static ULONG STDMETHODCALLTYPE net_opa_release(void *s) { return net_op_release(net_op_from(s, 0)); }
+static HRESULT STDMETHODCALLTYPE net_opi_query(void *s, REFIID i, void **o) { return net_op_query(net_op_from(s, 1), i, o); }
+static ULONG STDMETHODCALLTYPE net_opi_add_ref(void *s) { return net_op_add_ref(net_op_from(s, 1)); }
+static ULONG STDMETHODCALLTYPE net_opi_release(void *s) { return net_op_release(net_op_from(s, 1)); }
+
+static HRESULT STDMETHODCALLTYPE net_op_put_completed(void *self, NetCompletedHandler *handler) {
+    NetTokenOperation *op = net_op_from(self, 0);
+    if (InterlockedCompareExchange(&op->handler_set, 1, 0)) {
+        return (HRESULT)0x80000018L; /* E_ILLEGAL_DELEGATE_ASSIGNMENT */
+    }
+    if (handler) {
+        handler->lpVtbl->AddRef(handler);
+        op->handler = handler;
+        /* Already complete: WinRT invokes the handler right away. */
+        handler->lpVtbl->Invoke(handler, (NetTokenOperation *)&op->operation, 1);
+    }
+    return S_OK;
+}
+static HRESULT STDMETHODCALLTYPE net_op_get_completed(void *self, NetCompletedHandler **handler) {
+    NetTokenOperation *op = net_op_from(self, 0);
+    if (!handler) {
+        return E_POINTER;
+    }
+    *handler = op->handler;
+    if (op->handler) {
+        op->handler->lpVtbl->AddRef(op->handler);
+    }
+    return S_OK;
+}
+static HRESULT STDMETHODCALLTYPE net_op_get_results(void *self, NetTokenResult **result) {
+    NetTokenOperation *op = net_op_from(self, 0);
+    if (!result) {
+        return E_POINTER;
+    }
+    op->result->lpVtbl->AddRef(op->result);
+    *result = op->result;
+    return S_OK;
+}
+static HRESULT STDMETHODCALLTYPE net_op_get_id(void *self, unsigned *id) {
+    if (!id) {
+        return E_POINTER;
+    }
+    *id = net_op_from(self, 1)->id;
+    return S_OK;
+}
+static HRESULT STDMETHODCALLTYPE net_op_get_status(void *self, int *status) {
+    (void)self;
+    if (!status) {
+        return E_POINTER;
+    }
+    *status = 1; /* AsyncStatus::Completed */
+    return S_OK;
+}
+static HRESULT STDMETHODCALLTYPE net_op_get_error(void *self, HRESULT *error) {
+    (void)self;
+    if (!error) {
+        return E_POINTER;
+    }
+    *error = S_OK;
+    return S_OK;
+}
+static HRESULT STDMETHODCALLTYPE net_op_nothing(void *self) {
+    (void)self;
+    return S_OK;
+}
+static const NetTokenOperationVtbl net_op_vtable = {
+    net_opa_query, net_opa_add_ref, net_opa_release, net_inspectable_iids, net_inspectable_name,
+    net_inspectable_trust, net_op_put_completed, net_op_get_completed, net_op_get_results};
+static const NetAsyncInfoVtbl net_op_info_vtable = {
+    net_opi_query, net_opi_add_ref, net_opi_release, net_inspectable_iids, net_inspectable_name,
+    net_inspectable_trust, net_op_get_id, net_op_get_status, net_op_get_error, net_op_nothing,
+    net_op_nothing};
+
+static HRESULT net_issue_token(void **out) {
+    if (!out) {
+        return E_POINTER;
+    }
+    *out = 0;
+    NetTokenResult *result = net_alloc(sizeof(*result));
+    NetTokenOperation *op = net_alloc(sizeof(*op));
+    if (!result || !op) {
+        net_free(result);
+        net_free(op);
+        return E_OUTOFMEMORY;
+    }
+    result->lpVtbl = &net_result_vtable;
+    result->references = 1;
+    op->operation = &net_op_vtable;
+    op->info = &net_op_info_vtable;
+    op->references = 1;
+    op->id = (unsigned)InterlockedIncrement(&net_token_ids);
+    op->result = result;
+    *out = &op->operation;
+    return S_OK;
+}
+
+/* Out-parameter position per slot: (method, url, headers, out),
+   (method, url, headers, body length, body, out), (method, url, headers, body, out). */
+#define NET_TOKEN_THUNK(n, out)                                                                 \
     static HRESULT net_token_##n(void *a, void *b, void *c, void *d, void *e, void *f, void *g, \
                                  void *h) {                                                     \
+        (void)a, (void)d, (void)e, (void)f, (void)g, (void)h;                                   \
         net_trace_token(n, b, c);                                                               \
-        return net_token_original[n](a, b, c, d, e, f, g, h);                                   \
+        return net_issue_token((void **)(out));                                                 \
     }
-NET_TOKEN_THUNK(0)
-NET_TOKEN_THUNK(1)
-NET_TOKEN_THUNK(2)
-NET_TOKEN_THUNK(3)
-NET_TOKEN_THUNK(4)
-NET_TOKEN_THUNK(5)
+NET_TOKEN_THUNK(0, e)
+NET_TOKEN_THUNK(1, g)
+NET_TOKEN_THUNK(2, f)
+NET_TOKEN_THUNK(3, e)
+NET_TOKEN_THUNK(4, g)
+NET_TOKEN_THUNK(5, f)
 static const NetTokenFn net_token_thunks[6] = {net_token_0, net_token_1, net_token_2,
                                                net_token_3, net_token_4, net_token_5};
 
@@ -1368,8 +1683,8 @@ static void net_install_trace(void) {
         ++patched;
     }
     log_append(patched == ARRAY_COUNT(net_token_slots)
-                   ? "XBL: token trace installed on all 6 User slots.\r\n"
-                   : "XBL: token trace installed on only some User slots.\r\n");
+                   ? "XBL: fake token installed on all 6 User slots.\r\n"
+                   : "XBL: fake token installed on only some User slots.\r\n");
 }
 
 void azimuth_apply_network(const wchar_t *directory) {
