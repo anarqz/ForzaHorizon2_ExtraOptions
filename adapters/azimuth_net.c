@@ -545,6 +545,7 @@ static HRESULT STDMETHODCALLTYPE net_request_open(NetRequest *self, const WCHAR 
     }
     callback->lpVtbl->AddRef(callback);
     self->callback = callback;
+    net_log_open(self);
     return S_OK;
 }
 
@@ -589,6 +590,49 @@ static int net_read_body(NetRequest *request, SequentialStream *body, ULONGLONG 
         }
     }
     return 1;
+}
+
+/* Diagnostics in FH2_ExtraOptions.log: first occurrence of each event. */
+static volatile LONG net_seen_xhr, net_seen_mmdevice, net_seen_write_error, net_logged_opens;
+
+static void net_log_once(volatile LONG *flag, const char *message) {
+    if (!InterlockedCompareExchange(flag, 1, 0)) {
+        log_append(message);
+    }
+}
+
+static void net_log_guid(const char *prefix, const unsigned char *guid) {
+    static const char digits[] = "0123456789abcdef";
+    Buffer line = {0};
+    char hex[33];
+    for (unsigned i = 0; i < 16; ++i) {
+        hex[2 * i] = digits[guid[i] >> 4];
+        hex[2 * i + 1] = digits[guid[i] & 15];
+    }
+    hex[32] = 0;
+    if (buffer_append_text(&line, prefix) && buffer_append_text(&line, hex) &&
+        buffer_append_text(&line, " (raw GUID bytes)\r\n")) {
+        log_append((const char *)line.data);
+    }
+    buffer_free(&line);
+}
+
+static void net_log_open(NetRequest *request) {
+    if (InterlockedIncrement(&net_logged_opens) > 64) {
+        return;
+    }
+    Buffer line = {0};
+    if (buffer_append_text(&line, "NETWORK: open #") &&
+        buffer_append_number(&line, (ULONGLONG)request->id) && buffer_append_text(&line, " ") &&
+        buffer_append_json_wide(&line, buffer_wide(&request->method),
+                                request->method.size / sizeof(wchar_t)) &&
+        buffer_append_text(&line, " ") &&
+        buffer_append_json_wide(&line, buffer_wide(&request->url),
+                                request->url.size / sizeof(wchar_t)) &&
+        buffer_append_text(&line, "\r\n")) {
+        log_append((const char *)line.data);
+    }
+    buffer_free(&line);
 }
 
 static void net_capture(NetRequest *request, int answered, HRESULT error) {
@@ -636,6 +680,8 @@ static void net_capture(NetRequest *request, int answered, HRESULT error) {
             DWORD written;
             WriteFile(file, line.data, (DWORD)line.size, &written, NULL);
             CloseHandle(file);
+        } else {
+            net_log_once(&net_seen_write_error, "NETWORK: cannot open FH2_Network.jsonl for append.\r\n");
         }
         ReleaseSRWLockExclusive(&net_log_lock);
     }
@@ -1019,6 +1065,7 @@ static HRESULT net_co_create_instance(REFCLSID clsid, void *outer, DWORD context
         if (outer) {
             return CLASS_E_NOAGGREGATION;
         }
+        net_log_once(&net_seen_xhr, "NETWORK: game created its first IXMLHTTPRequest2.\r\n");
         NetRequest *request = net_alloc(sizeof(*request));
         if (!request) {
             return E_OUTOFMEMORY;
@@ -1037,11 +1084,13 @@ static HRESULT net_co_create_instance(REFCLSID clsid, void *outer, DWORD context
         if (!(context & NET_CLSCTX_INPROC_SERVER)) {
             return E_INVALIDARG;
         }
+        net_log_once(&net_seen_mmdevice,
+                     "NETWORK: CoCreateInstance reached the hook (MMDeviceEnumerator -> Azimuth).\r\n");
         MmDeviceFactoryFn factory =
             (MmDeviceFactoryFn)(uintptr_t)(net_azimuth_base + NET_MMDEVICE_FACTORY_RVA);
         return factory(iid, out);
     }
-    log_append("NETWORK: refused CoCreateInstance for a class Azimuth does not provide.\r\n");
+    net_log_guid("NETWORK: refused CoCreateInstance for unknown CLSID ", (const unsigned char *)clsid);
     return REGDB_E_CLASSNOTREG;
 }
 
