@@ -2026,7 +2026,7 @@ static const unsigned char net_iid_data_reader[16] = {0x29, 0x00, 0xb5, 0xe2, 0x
                                                       0x3a, 0x2f, 0x27, 0x5e};
 static const unsigned char net_iid_data_reader_statics[16] = {0xc8, 0xbf, 0xfc, 0x11, 0x3a, 0xf9,
                                                               0x1b, 0x47, 0xb1, 0x21, 0xf3, 0x79,
-                                                              0xe3, 0x49, 0x3c, 0x3c};
+                                                              0xe3, 0x49, 0x31, 0x3c};
 #define NET_HSTRING_CREATE_RVA 0x86110u
 typedef HRESULT (*NetHstringCreateFn)(const wchar_t *, unsigned, void **);
 
