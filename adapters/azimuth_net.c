@@ -524,6 +524,8 @@ static ULONG STDMETHODCALLTYPE net_request_release(NetRequest *self) {
     return (ULONG)left;
 }
 
+static void net_log_open(NetRequest *request);
+
 static HRESULT STDMETHODCALLTYPE net_request_open(NetRequest *self, const WCHAR *method,
                                                   const WCHAR *url, XhrCallback *callback,
                                                   const WCHAR *user, const WCHAR *password,
