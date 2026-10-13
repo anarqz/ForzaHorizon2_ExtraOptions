@@ -81,7 +81,8 @@ static char *trim_whitespace(char *text) {
 }
 
 static int known_section(const char *name) {
-    if (text_equal_ignore_case(name, "General")) {
+    if (text_equal_ignore_case(name, "General") ||
+        text_equal_ignore_case(name, "Network")) {
         return 1;
     }
     for (size_t index = 0; index < setting_count; ++index) {
@@ -189,6 +190,22 @@ static int parse_ini(char *text, ModOptions *options) {
                 goto invalid;
             }
             continue;
+        }
+
+        /* FH2Online: [Network] is read by adapters/azimuth_net.c. */
+        if (text_equal_ignore_case(section, "Network")) {
+            if (text_equal_ignore_case(key, "Mode")) {
+                if (!text_equal_ignore_case(value, "Off") &&
+                    !text_equal_ignore_case(value, "Capture") &&
+                    !text_equal_ignore_case(value, "Proxy")) {
+                    goto invalid;
+                }
+                continue;
+            }
+            if (text_equal_ignore_case(key, "Server") && *value) {
+                continue;
+            }
+            goto invalid;
         }
 
         const SettingDefinition *definition = find_setting(section, key);

@@ -28,3 +28,8 @@ EXPORTS
     GetProcAddress
     FreeLibrary
         
+    CreateThread
+    WideCharToMultiByte
+    GetTickCount64
+    AcquireSRWLockExclusive
+    ReleaseSRWLockExclusive

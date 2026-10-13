@@ -23,4 +23,5 @@ int azimuth_patch_host_code(unsigned char *base, const HostPatchSet *set);
 int azimuth_patch_host_codes(unsigned char *base, const HostPatchSet *sets, unsigned count);
 void azimuth_apply_livery_compatibility(void);
 void azimuth_apply_save_compatibility(int disable_checksums);
+void azimuth_apply_network(const wchar_t *directory);
 #endif
