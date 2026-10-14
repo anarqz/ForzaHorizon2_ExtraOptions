@@ -127,8 +127,9 @@ static int ui_edit_options(const char *page, unsigned length, UiText *out) {
            ui_copy(out, &at, end + 2, 0, UI_INFINITY_BUTTON) && ui_copy(out, &at, page + length, 0, 0);
 }
 
-/* The pause menu with the status line after its player bar (same top margin as the bar). */
-static int ui_edit_pause(const char *page, unsigned length, const char *text, const char *color, UiText *out) {
+/* The pause menu with the status line after its player bar (same top margin as the bar).
+   `text` is either a literal or "{local:Loc Category.Key}". */
+static int ui_edit_pause(const char *page, unsigned length, const char *text, UiText *out) {
     const char *bar = ui_find(page, length, "x:Name=\"TopBar\" />", 0);
     if (!bar || ui_find(page, length, "x:Name=\"TopBar\" />", (unsigned)(bar - page) + 1)) {
         return 0;
@@ -136,16 +137,97 @@ static int ui_edit_pause(const char *page, unsigned length, const char *text, co
     const char *at = page;
     out->length = 0;
     return ui_copy(out, &at, bar + text_length("x:Name=\"TopBar\" />"), 0,
-                   "\r\n        <StackPanel Orientation=\"Horizontal\" HorizontalAlignment=\"Center\" "
-                   "VerticalAlignment=\"Top\" Margin=\"0,40,0,0\">\r\n"
-                   "            <local:FZMaterial Width=\"12\" Height=\"12\" VerticalAlignment=\"Center\" "
-                   "Margin=\"0,0,12,0\" Color=\"") &&
-           ui_copy(out, &at, at, 0, color) && ui_copy(out, &at, at, 0, "\" />\r\n            <local:FZTextBlock Text=\"") &&
+                   "\r\n        <local:FZTextBlock HorizontalAlignment=\"Center\" VerticalAlignment=\"Top\" "
+                   "Margin=\"0,40,0,0\" Text=\"") &&
            ui_copy(out, &at, at, 0, text) &&
            ui_copy(out, &at, at, 0,
-                   "\" Style=\"{StaticResource A_Style_FZTextBlock_AnthemA}\" Color=\"#f5f5f5\" FontSize=\"24\" "
-                   "VerticalAlignment=\"Center\" />\r\n        </StackPanel>") &&
+                   "\" Style=\"{StaticResource A_Style_FZTextBlock_AnthemA}\" Color=\"#f5f5f5\" FontSize=\"24\" />") &&
            ui_copy(out, &at, page + length, 0, 0);
+}
+
+/* ------------------------------------------------------- live status line */
+
+/* The game keeps the pause page it built the first time, so its text cannot carry the
+   status. The line shows a game string instead: one of the Kinect split-screen strings (never
+   shown on PC), the longest in the game's language, whose text in the loaded string table is
+   rewritten every few seconds (FUN_14123d4b0: id of a string name; FUN_14123a570(&string,
+   category, id): a CLocString, GetText at vtable +0x38). */
+#define UI_LOC_ID_RVA 0x123d4b0u
+#define UI_LOC_MAKE_RVA 0x123a570u
+#define UI_STATUS_CATEGORY "KinectSplitscreen"
+
+typedef unsigned (*UiLocIdFn)(const char *);
+typedef void **(*UiLocMakeFn)(void **, const char *, unsigned);
+typedef wchar_t *(*UiLocTextFn)(void *);
+typedef void(WINAPI *UiSleepFn)(DWORD);
+
+static const char *const ui_status_keys[] = {
+    "IDS_P2_Wave_To_Signin", "IDS_Will_Now_Choose_Car", "IDS_Choose_Car", "IDS_Player_2", "IDS_Guest",
+    "IDS_Choose_The_Track", "IDS_Choose_Your_Car", "IDS_Scroll_Directions", "IDS_Kinect_Splitscreen",
+    "IDS_Requires_Two_Players", "IDS_Looking_For_Player_2", "IDS_Both_Players_In_Range", "IDS_To_MainMenu",
+    "IDS_To_QuitRace", "IDS_Player_Wins", "IDS_Profile_Stomp_Title", "IDS_Profile_Stomp_Desc"};
+static wchar_t *ui_status_text;
+static size_t ui_status_capacity;
+static const char *ui_status_key;
+
+static size_t ui_wlen(const wchar_t *text) {
+    size_t n = 0;
+    while (text && text[n]) {
+        ++n;
+    }
+    return n;
+}
+
+/* Picks the longest of those strings (its text buffer is kept); 0 when none is found. */
+static int ui_status_find(void) {
+    if (ui_status_text) {
+        return 1;
+    }
+    for (unsigned i = 0; i < ARRAY_COUNT(ui_status_keys); ++i) {
+        unsigned id = ((UiLocIdFn)(uintptr_t)(ui_game + UI_LOC_ID_RVA))(ui_status_keys[i]);
+        void *string = 0;
+        ((UiLocMakeFn)(uintptr_t)(ui_game + UI_LOC_MAKE_RVA))(&string, UI_STATUS_CATEGORY, id);
+        if (!string) {
+            continue;
+        }
+        wchar_t *text = ((UiLocTextFn)ui_slot(string, 0x38))(string);
+        size_t n = ui_wlen(text);
+        /* the string object is kept (never released): its text must stay where it is */
+        if (n > ui_status_capacity && memory_is_writable(text, (n + 1) * sizeof(wchar_t))) {
+            ui_status_text = text;
+            ui_status_capacity = n;
+            ui_status_key = ui_status_keys[i];
+        }
+    }
+    return ui_status_text != 0;
+}
+
+/* Writes the current status into that string (padded with NULs to its full length). */
+static void ui_status_write(void) {
+    static char text[200];
+    const char *color;
+    if (!ui_status_text || !azimuth_account_banner(text, sizeof(text), &color)) {
+        return;
+    }
+    size_t n = 0;
+    for (; text[n] && n < ui_status_capacity; ++n) {
+        ui_status_text[n] = (wchar_t)(unsigned char)text[n];
+    }
+    for (size_t i = n; i <= ui_status_capacity; ++i) {
+        ui_status_text[i] = 0;
+    }
+}
+
+static DWORD WINAPI ui_status_thread(void *unused) {
+    (void)unused;
+    UiSleepFn sleep = (UiSleepFn)(uintptr_t)GetProcAddress(GetModuleHandleW(L"kernel32.dll"), "Sleep");
+    if (!sleep) {
+        return 0;
+    }
+    for (;;) {
+        ui_status_write();
+        sleep(5000);
+    }
 }
 
 /* --------------------------------------------------------- INFINITY page */
@@ -492,12 +574,31 @@ static void ui_replace(void **out, void *stream) {
             ui_rewind(stream);
             return;
         }
+        /* the live line (a game string rewritten by ui_status_thread), else this text */
+        if (ui_status_find()) {
+            static int started;
+            text[0] = 0;
+            memory_copy(text, "{local:Loc " UI_STATUS_CATEGORY ".", sizeof("{local:Loc " UI_STATUS_CATEGORY "."));
+            size_t n = text_length(text), k = text_length(ui_status_key);
+            memory_copy(text + n, ui_status_key, k);
+            text[n + k] = '}';
+            text[n + k + 1] = 0;
+            ui_status_write();
+            if (!started) {
+                started = 1;
+                HANDLE thread = CreateThread(0, 0, ui_status_thread, 0, 0, 0);
+                if (thread) {
+                    CloseHandle(thread);
+                }
+                log_append("UI: pause status line follows the server live.\r\n");
+            }
+        }
         /* a new buffer only when the line changes */
         UiText *page = &ui_pause[ui_pause_current];
         if (!page->length || !memory_equal(ui_pause_banner, text, text_length(text) + 1)) {
             ui_pause_current ^= 1;
             page = &ui_pause[ui_pause_current];
-            if (!ui_edit_pause(ui_source, UI_PAUSE_SIZE, text, color, page)) {
+            if (!ui_edit_pause(ui_source, UI_PAUSE_SIZE, text, page)) {
                 page->length = 0;
                 ui_pause_failed = 1;
                 log_append("UI: A_PauseMenu.xaml not as expected; no Infinity status line.\r\n");

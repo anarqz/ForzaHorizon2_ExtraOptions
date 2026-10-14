@@ -19,6 +19,11 @@ void memory_copy(void *destination, const void *source, size_t size) {
 int memory_equal(const void *left, const void *right, size_t size) {
     return !memcmp(left, right, size);
 }
+int memory_is_writable(const void *address, size_t size) {
+    (void)address;
+    (void)size;
+    return 1;
+}
 int memory_read(const void *address, void *output, size_t size) {
     memcpy(output, address, size);
     return 1;
@@ -80,7 +85,7 @@ int main(int argc, char **argv) {
     ok &= page && ui_edit_options(page, n, &ui_options) && spit(argv[1], "options", &ui_options);
     ok &= page && ui_edit_infinity(page, n, &ui_infinity) && spit(argv[1], "infinity", &ui_infinity);
     page = slurp(argv[2], &n);
-    ok &= page && ui_edit_pause(page, n, "INFINITY  |  SEM CONEX\xc3\x83O COM O SERVIDOR", "#ff4f4f", &ui_pause[0]) &&
+    ok &= page && ui_edit_pause(page, n, "{local:Loc KinectSplitscreen.IDS_Profile_Stomp_Desc}", &ui_pause[0]) &&
           spit(argv[2], "pause", &ui_pause[0]);
     page = slurp(argv[3], &n);
     ok &= page && ui_replace_anchors(page, n, ui_screens_edits, ARRAY_COUNT(ui_screens_edits) / 2, &ui_screens) &&
