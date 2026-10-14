@@ -27,9 +27,11 @@ static void *available_tracker;
 typedef struct {
     void *satnav, *tracker, *car, *route;
     float elapsed;
-    int cinematic, tried_camera;
+    int cinematic, tried_camera, event;
     AutodriveCamera camera;
 } AutodriveState;
+
+static int events_enabled;
 
 static AutodriveState drive;
 
@@ -92,8 +94,36 @@ static void stop_driving(const char *reason, int flash) {
     log_append(reason);
 }
 
+/* InEvents: in a race the native AI driver follows the event's own route, so only the
+   driver handoff is needed (no GPS route tracking, no cinematic camera). */
+static void start_event_driving(void *satnav) {
+    void *car = autodrive_game_get_car();
+    if (!car) {
+        return;
+    }
+    if (autodrive_game_driver_mode(car) != 1) {
+        autodrive_game_release_car(car);
+        log_append("AUTODRIVE: toggle ignored while another flow controls the car.\r\n");
+        return;
+    }
+    if (!autodrive_game_set_ai(car, 1)) {
+        autodrive_game_release_car(car);
+        log_append("AUTODRIVE: native AI driver handoff failed.\r\n");
+        return;
+    }
+    drive.satnav = satnav;
+    drive.car = car;
+    drive.event = 1;
+    drive.tried_camera = 1;
+    log_append("AUTODRIVE: event driving started; F2 or D-pad Down cancels.\r\n");
+}
+
 static void start_driving(void *satnav) {
     if (!autodrive_game_is_freeroam()) {
+        if (events_enabled && autodrive_game_is_unpaused()) {
+            start_event_driving(satnav);
+            return;
+        }
         log_append("AUTODRIVE: toggle ignored outside unpaused single-player free roam.\r\n");
         return;
     }
@@ -177,7 +207,20 @@ static void autodrive_tick(void *satnav, float dt) {
         }
         if (pressed || escape || !focused) {
             stop_driving("AUTODRIVE: cancelled by toggle, Escape, or focus loss.\r\n",
-                         pressed && focused && !escape && autodrive_game_is_freeroam());
+                         !drive.event && pressed && focused && !escape &&
+                             autodrive_game_is_freeroam());
+            return;
+        }
+        if (drive.event) {
+            void *current_car = autodrive_game_get_car();
+            int same_car = current_car == drive.car;
+            autodrive_game_release_car(current_car);
+            if (!autodrive_game_is_unpaused() || autodrive_game_driving_input(controller) ||
+                !same_car || autodrive_game_driver_mode(drive.car) != 0) {
+                stop_driving("AUTODRIVE: event driving stopped (pause, input, car or control "
+                             "change).\r\n",
+                             0);
+            }
             return;
         }
         if (!autodrive_game_is_freeroam()) {
@@ -289,6 +332,7 @@ void autodrive_prepare_hooks(unsigned char *image, const ModOptions *options) {
     autodrive_notice_prepare(image);
     autodrive_ui_prepare(image);
     cinematic_enabled = options->autodrive_cinematic;
+    events_enabled = options->autodrive_events;
     for (unsigned i = 0; i < 12; ++i) {
         uintptr_t original = (uintptr_t)(image + originals[i]);
         memory_copy(original_pointers[i], &original, 8);

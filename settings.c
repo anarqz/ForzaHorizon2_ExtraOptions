@@ -27,6 +27,8 @@ const SettingDefinition setting_definitions[] = {
     {"Autodrive", "Enabled", "AutodriveEnabled", offsetof(ModOptions, autodrive), SETTING_BOOLEAN},
     {"Autodrive", "Cinematic", "AutodriveCinematic", offsetof(ModOptions, autodrive_cinematic),
      SETTING_BOOLEAN},
+    {"Autodrive", "InEvents", "AutodriveInEvents", offsetof(ModOptions, autodrive_events),
+     SETTING_BOOLEAN},
     {"Language", "Text", "TextLanguage", offsetof(ModOptions, text_language),
      SETTING_TEXT_LANGUAGE},
     {"Language", "Audio", "AudioLanguage", offsetof(ModOptions, audio_language),

@@ -90,6 +90,7 @@ def build(compiler, output, directory, options):
             "adapters/azimuth_livery.c",
             "adapters/azimuth_save.c",
             "adapters/azimuth_net.c",
+            "adapters/azimuth_pad.c",
         ]
         if options.azimuth
         else ["adapters/mezcal.c"]

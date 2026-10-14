@@ -97,6 +97,14 @@ int autodrive_game_driving_input(void *controller) {
     return triggers[0] || triggers[1] || steering < -0.05f || steering > 0.05f;
 }
 
+int autodrive_game_is_unpaused(void) {
+    void *game, *simulation;
+    unsigned char paused;
+    return read_pointer(image + GAME_RVA_PLAYER_MANAGER, &game) &&
+           read_pointer((unsigned char *)game + 0x48, &simulation) &&
+           memory_read((unsigned char *)simulation + 0x28, &paused, 1) && !paused;
+}
+
 int autodrive_game_is_freeroam(void) {
     void *game, *simulation, *hud_manager, *services;
     unsigned char paused;

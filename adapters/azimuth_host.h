@@ -25,4 +25,5 @@ void azimuth_apply_livery_compatibility(void);
 void azimuth_apply_save_compatibility(int disable_checksums);
 void azimuth_apply_network(const wchar_t *directory);
 void azimuth_apply_economy_probe(unsigned char *game_image);
+void azimuth_apply_pad(void);
 #endif

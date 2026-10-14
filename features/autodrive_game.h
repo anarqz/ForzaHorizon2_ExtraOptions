@@ -23,6 +23,7 @@ void autodrive_game_bind(unsigned char *image);
 int autodrive_game_get_hud(AutodriveHud *hud);
 void autodrive_game_release_shared(GameShared *value);
 int autodrive_game_is_freeroam(void);
+int autodrive_game_is_unpaused(void);
 int autodrive_game_dpad_down(void **controller);
 int autodrive_game_driving_input(void *controller);
 void *autodrive_game_get_car(void);

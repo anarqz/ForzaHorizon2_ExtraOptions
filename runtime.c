@@ -30,6 +30,7 @@ int runtime_initialize(unsigned char *game_image, const wchar_t *executable_path
         azimuth_apply_save_compatibility(options.disable_azimuth_save_checksums);
         azimuth_apply_network(settings_directory);
         azimuth_apply_economy_probe(game_image);
+        azimuth_apply_pad();
     }
 #endif
     if (initialized && options.enabled &&

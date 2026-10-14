@@ -6,7 +6,7 @@
 #include <stddef.h>
 
 #define MOD_NAME "Forza Horizon 2 Extra Options"
-#define MOD_VERSION "0.2.34+fh2online.12"
+#define MOD_VERSION "0.2.34+fh2online.14"
 #define MOD_INI_NAME L"FH2_ExtraOptions.ini"
 #define MOD_LOG_NAME L"FH2_ExtraOptions.log"
 #define GAME_EXE_NAME L"forza_durango_release_final.exe"
@@ -69,6 +69,7 @@ typedef struct {
     int unlock_treasure_map;
     int autodrive;
     int autodrive_cinematic;
+    int autodrive_events;
     int disable_azimuth_save_checksums;
     int smooth_sun_shadows;
 } ModOptions;
