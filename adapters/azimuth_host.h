@@ -36,4 +36,19 @@ DWORD azimuth_net_call(const wchar_t *method, const wchar_t *path, const wchar_t
 /* azimuth_account.c: the player's FH2Online account on that server. */
 void azimuth_apply_account(const wchar_t *directory);
 const wchar_t *azimuth_account_token(void);
+/* -1 unavailable, 0 no account, 1 account kept but offline profile, 2 playing online */
+int azimuth_account_state(void);
+const wchar_t *azimuth_account_gamertag(void);
+const wchar_t *azimuth_account_web_key(void);
+const wchar_t *azimuth_account_discriminator(void);
+const wchar_t *azimuth_account_server(void);
+int azimuth_account_valid_name(const wchar_t *name);
+int azimuth_account_register(const wchar_t *name, wchar_t *message, size_t cap);
+int azimuth_account_new_web_key(wchar_t *message, size_t cap);
+int azimuth_account_add_friend(const wchar_t *gamertag, wchar_t *message, size_t cap);
+void azimuth_account_set_online(int online);
+void azimuth_account_restart(void);
+
+/* azimuth_online_menu.c: Configurações > MULTIPLAYER. */
+void azimuth_apply_online_menu(unsigned char *game_image);
 #endif

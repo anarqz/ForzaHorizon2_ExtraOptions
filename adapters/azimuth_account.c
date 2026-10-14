@@ -1,19 +1,21 @@
 /* FH2Online account: "name#12345" on the configured server.
 
-   The 5 digits come from a fingerprint of this PC: SHA-256 of the Windows MachineGuid and
-   the serial of the volume holding the mod. Only those 5 digits and a per-server device id
+   The player creates it from the game (Configurações > Multiplayer, azimuth_online_menu.c):
+   the 5 digits come from a fingerprint of this PC (SHA-256 of the Windows MachineGuid and the
+   serial of the volume holding the mod). Only those 5 digits and a per-server device id
    (SHA-256 of the fingerprint + "host:port", so servers cannot match players up) leave the
-   PC. The server answers with an XUID and a token, kept in FH2Online_Accounts.ini (one
-   section per server); the network layer then sends X-Fh2-Token on every request to it.
+   PC. The server answers with an XUID, a device token and a web key (for the site); they are
+   kept in FH2Online_Accounts.ini, one section per server, with Online=1/0 (whether the game
+   starts in the online profile). The network layer sends X-Fh2-Token on every request.
 
-   The game sees the account through Azimuth's LocalUser:
+   When the game starts online, it sees the account through Azimuth's LocalUser:
    - XboxUserId (vtable slot 0x24ff88, Azimuth formats a fixed 0x9000000000000) returns the
-     account XUID;
+     account XUID; Azimuth then keeps a separate save (User_<xuid>), so the online profile
+     starts from zero and the offline save is left alone;
    - the gamertag / display names (LocalDisplayInfo slots 0x24ffe8, 0x24fff8, 0x250000) are
      read from Azimuth's player-name std::wstring (RVA 0x318c60), which is rewritten in place.
-   Registration runs on its own thread; those getters wait for it (at most 10 s), so the
-   game never caches the old identity. Without [Account] Name, or when the server refuses,
-   the game keeps Azimuth's player as before. */
+   The token is checked on a thread; those getters wait for it (at most 10 s), so the game
+   never caches the old identity. Joining or leaving the online profile restarts the game. */
 #include "azimuth_host.h"
 #include "logging.h"
 #include "sha256.h"
@@ -33,6 +35,8 @@ typedef BOOL(WINAPI *GetVolumeInformationWFn)(LPCWSTR, LPWSTR, DWORD, LPDWORD, L
                                                LPWSTR, DWORD);
 typedef LONG(WINAPI *RegGetValueWFn)(HKEY, LPCWSTR, LPCWSTR, DWORD, LPDWORD, PVOID, LPDWORD);
 typedef void(WINAPI *SleepFn)(DWORD);
+typedef BOOL(WINAPI *CreateProcessWFn)(LPCWSTR, LPWSTR, void *, void *, BOOL, DWORD, void *, LPCWSTR,
+                                       STARTUPINFOW *, PROCESS_INFORMATION *);
 
 static const unsigned account_info_slots[3] = {0x24ffe8u, 0x24fff8u, 0x250000u};
 static const unsigned account_info_targets[3] = {0x233d0u, 0x234c0u, 0x234d0u};
@@ -41,14 +45,17 @@ static AccountGetterFn account_xuid_original;
 
 static unsigned char *account_host;
 static wchar_t account_directory[PATH_CAPACITY], account_file[PATH_CAPACITY];
-static wchar_t account_name[16];
 static const wchar_t *account_server;
-static volatile LONG account_ready; /* registration finished (with or without an account) */
-static int account_active;          /* the game uses the account below */
+static volatile LONG account_ready = 1; /* token check finished (or not needed) */
+static int account_available;           /* fingerprint and paths ready: the menu can work */
+static int account_active;              /* this session plays as the account */
 static wchar_t account_token[72];
 static wchar_t account_xuid[24];
 static wchar_t account_gamertag[24];
+static wchar_t account_web_key[24];
+static wchar_t account_online[4];
 static char account_discriminator[6];
+static wchar_t account_discriminator_wide[6];
 static char account_device[65];
 static SleepFn account_sleep;
 
@@ -89,13 +96,13 @@ static void wide_to_ascii(const wchar_t *in, char *out, size_t cap) {
     out[n] = 0;
 }
 
-static void ascii_to_wide(const char *in, wchar_t *out, size_t cap) {
-    size_t n = 0;
-    while (in && in[n] && n + 1 < cap) {
-        out[n] = (unsigned char)in[n];
-        ++n;
+/* UTF-8 (server messages) to UTF-16. */
+static void utf8_to_wide(const char *in, wchar_t *out, size_t cap) {
+    out[0] = 0;
+    if (in && *in) {
+        int n = MultiByteToWideChar(CP_UTF8, 0, in, -1, out, (int)cap);
+        out[n > 0 ? n - 1 : 0] = 0;
     }
-    out[n] = 0;
 }
 
 /* The string value of "key" in a flat JSON object (no nesting), escapes \" and \\ only. */
@@ -129,7 +136,7 @@ static int json_string(const char *json, const char *key, char *out, size_t cap)
 }
 
 /* 1 to 9 ASCII letters or digits starting with a letter (the server checks it too). */
-static int valid_name(const wchar_t *name) {
+int azimuth_account_valid_name(const wchar_t *name) {
     size_t n = wide_len(name);
     if (n < 1 || n > 9 || !((name[0] >= L'A' && name[0] <= L'Z') || (name[0] >= L'a' && name[0] <= L'z'))) {
         return 0;
@@ -141,6 +148,16 @@ static int valid_name(const wchar_t *name) {
         }
     }
     return 1;
+}
+
+static void account_log(const char *prefix, const char *detail) {
+    static char line[640];
+    line[0] = 0;
+    text_add(line, sizeof(line), "ACCOUNT: ");
+    text_add(line, sizeof(line), prefix);
+    text_add(line, sizeof(line), detail);
+    text_add(line, sizeof(line), "\r\n");
+    log_append(line);
 }
 
 /* ----------------------------------------------------------- fingerprint */
@@ -191,9 +208,11 @@ static int account_fingerprint(void) {
     number %= 100000u;
     for (int i = 4; i >= 0; --i) {
         account_discriminator[i] = (char)('0' + number % 10);
+        account_discriminator_wide[i] = (wchar_t)account_discriminator[i];
         number /= 10;
     }
     account_discriminator[5] = 0;
+    account_discriminator_wide[5] = 0;
 
     /* per-server device id: SHA-256(hex(fingerprint) | host:port) */
     char full_hex[65], server[300];
@@ -210,27 +229,21 @@ static int account_fingerprint(void) {
     return 1;
 }
 
-/* ---------------------------------------------------------- token storage */
+/* ---------------------------------------------------------- local storage */
 
-static void account_save(void) {
+static int account_write(const wchar_t *key, const wchar_t *value) {
     HMODULE kernel = GetModuleHandleW(L"kernel32.dll");
     WritePrivateProfileStringWFn write =
         kernel ? (WritePrivateProfileStringWFn)(uintptr_t)GetProcAddress(kernel, "WritePrivateProfileStringW") : 0;
-    if (!write || !write(account_server, L"Token", account_token, account_file) ||
-        !write(account_server, L"Xuid", account_xuid, account_file) ||
-        !write(account_server, L"Gamertag", account_gamertag, account_file)) {
-        log_append("ACCOUNT: could not write FH2Online_Accounts.ini; the account works for this session only.\r\n");
-    }
+    return write && write(account_server, key, value, account_file);
 }
 
-static void account_forget(void) {
-    HMODULE kernel = GetModuleHandleW(L"kernel32.dll");
-    WritePrivateProfileStringWFn write =
-        kernel ? (WritePrivateProfileStringWFn)(uintptr_t)GetProcAddress(kernel, "WritePrivateProfileStringW") : 0;
-    if (write) {
-        write(account_server, L"Token", 0, account_file);
+static void account_save(void) {
+    if (!account_write(L"Token", account_token) || !account_write(L"Xuid", account_xuid) ||
+        !account_write(L"Gamertag", account_gamertag) || !account_write(L"WebKey", account_web_key) ||
+        !account_write(L"Online", account_online)) {
+        log_append("ACCOUNT: could not write FH2Online_Accounts.ini.\r\n");
     }
-    account_token[0] = 0;
 }
 
 /* -------------------------------------------------------- identity patch */
@@ -268,17 +281,25 @@ static HRESULT account_get_xuid(void *self, void **out) {
     return create(account_xuid, (unsigned)wide_len(account_xuid), out);
 }
 
-static HRESULT account_get_info_0(void *self, void **out) {
+/* Gamertag / display names: answered from the account directly. Azimuth rewrites its
+   player-name string (e.g. when a controller is paired again), so patching it once is not
+   enough. */
+static HRESULT account_get_name(int slot, void *self, void **out) {
     account_wait();
-    return account_info_original[0](self, out);
+    if (!account_active || !out) {
+        return account_info_original[slot](self, out);
+    }
+    AccountHstringCreateFn create = (AccountHstringCreateFn)(uintptr_t)(account_host + ACCOUNT_HSTRING_CREATE_RVA);
+    return create(account_gamertag, (unsigned)wide_len(account_gamertag), out);
+}
+static HRESULT account_get_info_0(void *self, void **out) {
+    return account_get_name(0, self, out);
 }
 static HRESULT account_get_info_1(void *self, void **out) {
-    account_wait();
-    return account_info_original[1](self, out);
+    return account_get_name(1, self, out);
 }
 static HRESULT account_get_info_2(void *self, void **out) {
-    account_wait();
-    return account_info_original[2](self, out);
+    return account_get_name(2, self, out);
 }
 static const AccountGetterFn account_info_hooks[3] = {account_get_info_0, account_get_info_1,
                                                        account_get_info_2};
@@ -297,85 +318,64 @@ static int account_patch_slot(unsigned slot_rva, unsigned target_rva, AccountGet
     return 1;
 }
 
-/* -------------------------------------------------------- registration */
+/* ------------------------------------------------------------ server calls */
 
-static void account_log(const char *prefix, const char *detail) {
-    static char line[640];
-    line[0] = 0;
-    text_add(line, sizeof(line), "ACCOUNT: ");
-    text_add(line, sizeof(line), prefix);
-    text_add(line, sizeof(line), detail);
-    text_add(line, sizeof(line), "\r\n");
-    log_append(line);
-}
-
-/* Takes xuid/gamertag (and token, if present) from a server reply. */
+/* Takes xuid/gamertag (and token, web key when present) from a server reply. */
 static int account_take(const char *reply) {
     char value[96];
     if (!json_string(reply, "xuid", value, sizeof(value)) || !value[0]) {
         return 0;
     }
-    ascii_to_wide(value, account_xuid, ARRAY_COUNT(account_xuid));
+    utf8_to_wide(value, account_xuid, ARRAY_COUNT(account_xuid));
     if (!json_string(reply, "gamertag", value, sizeof(value)) || !value[0]) {
         return 0;
     }
-    ascii_to_wide(value, account_gamertag, ARRAY_COUNT(account_gamertag));
+    utf8_to_wide(value, account_gamertag, ARRAY_COUNT(account_gamertag));
     if (json_string(reply, "token", value, sizeof(value)) && value[0]) {
-        ascii_to_wide(value, account_token, ARRAY_COUNT(account_token));
+        utf8_to_wide(value, account_token, ARRAY_COUNT(account_token));
+    }
+    if (json_string(reply, "webKey", value, sizeof(value)) && value[0]) {
+        utf8_to_wide(value, account_web_key, ARRAY_COUNT(account_web_key));
     }
     return 1;
 }
 
-static DWORD WINAPI account_thread(void *unused) {
-    static char reply[2048], body[256], gamertag[32];
+static const wchar_t *account_token_header(void) {
     static wchar_t header[96];
-    (void)unused;
-    if (account_token[0]) {
-        /* known account: check the token is still good */
-        header[0] = 0;
-        memory_copy(header, L"X-Fh2-Token: ", sizeof(L"X-Fh2-Token: "));
-        size_t n = wide_len(header), t = wide_len(account_token);
-        if (n + t < ARRAY_COUNT(header)) {
-            memory_copy(header + n, account_token, (t + 1) * sizeof(wchar_t));
-        }
-        DWORD status = azimuth_net_call(L"GET", L"/fh2online/v1/me", header, 0, reply, sizeof(reply));
-        if (status == 200 && account_take(reply)) {
-            account_active = 1;
-        } else if (status == 401) {
-            account_log("the server no longer knows this PC's token; registering again.", "");
-            account_forget();
-        } else if (status == 403) {
-            json_string(reply, "error", body, sizeof(body));
-            account_log("account refused by the server: ", body);
-        } else {
-            /* server unreachable: keep the stored identity, the token is sent anyway */
-            account_active = account_xuid[0] && account_gamertag[0];
-            account_log("server unreachable; using the stored account.", "");
-        }
+    size_t n = sizeof(L"X-Fh2-Token: ") / sizeof(wchar_t) - 1, t = wide_len(account_token);
+    memory_copy(header, L"X-Fh2-Token: ", (n + 1) * sizeof(wchar_t));
+    if (n + t < ARRAY_COUNT(header)) {
+        memory_copy(header + n, account_token, (t + 1) * sizeof(wchar_t));
     }
-    if (!account_active && !account_token[0] && account_name[0]) {
-        char name[16];
-        wide_to_ascii(account_name, name, sizeof(name));
-        body[0] = 0;
-        text_add(body, sizeof(body), "{\"name\":\"");
-        text_add(body, sizeof(body), name);
-        text_add(body, sizeof(body), "\",\"discriminator\":\"");
-        text_add(body, sizeof(body), account_discriminator);
-        text_add(body, sizeof(body), "\",\"device\":\"");
-        text_add(body, sizeof(body), account_device);
-        text_add(body, sizeof(body), "\"}");
-        DWORD status = azimuth_net_call(L"POST", L"/fh2online/v1/register", 0, body, reply, sizeof(reply));
-        if (status == 200 && account_take(reply) && account_token[0]) {
-            account_active = 1;
-            account_save();
-            wide_to_ascii(account_gamertag, gamertag, sizeof(gamertag));
-            account_log("created ", gamertag);
-        } else if (status) {
-            json_string(reply, "error", body, sizeof(body));
-            account_log("registration refused: ", body);
-        } else {
-            account_log("registration failed: server unreachable.", "");
-        }
+    return header;
+}
+
+/* The server's {"error": "..."} as text for the player, or a fallback. */
+static void account_error(DWORD status, const char *reply, wchar_t *message, size_t cap) {
+    static char text[400];
+    if (status && json_string(reply, "error", text, sizeof(text)) && text[0]) {
+        utf8_to_wide(text, message, cap);
+    } else if (!status) {
+        utf8_to_wide("Não foi possível falar com o servidor. Verifique o endereço e se ele está no ar.",
+                     message, cap);
+    } else {
+        utf8_to_wide("O servidor recusou o pedido.", message, cap);
+    }
+}
+
+static DWORD WINAPI account_thread(void *unused) {
+    static char reply[2048], text[400], gamertag[32];
+    (void)unused;
+    DWORD status = azimuth_net_call(L"GET", L"/fh2online/v1/me", account_token_header(), 0, reply, sizeof(reply));
+    if (status == 200 && account_take(reply)) {
+        account_active = 1;
+    } else if (status == 401 || status == 403) {
+        json_string(reply, "error", text, sizeof(text));
+        account_log("the server refused this PC's account; playing offline: ", text);
+    } else {
+        /* server unreachable: keep the stored identity, the token is sent anyway */
+        account_active = account_xuid[0] && account_gamertag[0];
+        account_log("server unreachable; using the stored account.", "");
     }
     if (account_active) {
         wide_to_ascii(account_gamertag, gamertag, sizeof(gamertag));
@@ -385,13 +385,139 @@ static DWORD WINAPI account_thread(void *unused) {
     return 0;
 }
 
+/* ------------------------------------------------------- menu interface */
+
+int azimuth_account_state(void) {
+    if (!account_available) {
+        return -1;
+    }
+    if (account_active) {
+        return 2;
+    }
+    return account_token[0] ? 1 : 0;
+}
+
+const wchar_t *azimuth_account_gamertag(void) {
+    return account_gamertag;
+}
+
+const wchar_t *azimuth_account_web_key(void) {
+    return account_web_key;
+}
+
+const wchar_t *azimuth_account_discriminator(void) {
+    return account_discriminator_wide;
+}
+
+const wchar_t *azimuth_account_server(void) {
+    return account_server ? account_server : L"";
+}
+
+/* Creates "name#12345" on the server (one account per PC). On success the account is kept
+   with Online=1, so the next start plays as it. */
+int azimuth_account_register(const wchar_t *name, wchar_t *message, size_t cap) {
+    static char reply[2048], body[256];
+    char ascii[16];
+    if (!account_available || !azimuth_account_valid_name(name)) {
+        utf8_to_wide("O nome deve ter de 1 a 9 letras ou números e começar com uma letra.", message, cap);
+        return 0;
+    }
+    wide_to_ascii(name, ascii, sizeof(ascii));
+    body[0] = 0;
+    text_add(body, sizeof(body), "{\"name\":\"");
+    text_add(body, sizeof(body), ascii);
+    text_add(body, sizeof(body), "\",\"discriminator\":\"");
+    text_add(body, sizeof(body), account_discriminator);
+    text_add(body, sizeof(body), "\",\"device\":\"");
+    text_add(body, sizeof(body), account_device);
+    text_add(body, sizeof(body), "\"}");
+    DWORD status = azimuth_net_call(L"POST", L"/fh2online/v1/register", 0, body, reply, sizeof(reply));
+    if (status != 200 || !account_take(reply) || !account_token[0]) {
+        account_error(status, reply, message, cap);
+        account_token[0] = 0;
+        return 0;
+    }
+    memory_copy(account_online, L"1", sizeof(L"1"));
+    account_save();
+    wide_to_ascii(account_gamertag, ascii, sizeof(ascii));
+    account_log("created ", ascii);
+    return 1;
+}
+
+/* A new site key (the old one stops working). */
+int azimuth_account_new_web_key(wchar_t *message, size_t cap) {
+    static char reply[1024], key[64];
+    DWORD status = azimuth_net_call(L"POST", L"/fh2online/v1/webkey", account_token_header(), "{}", reply, sizeof(reply));
+    if (status != 200 || !json_string(reply, "webKey", key, sizeof(key)) || !key[0]) {
+        account_error(status, reply, message, cap);
+        return 0;
+    }
+    utf8_to_wide(key, account_web_key, ARRAY_COUNT(account_web_key));
+    account_write(L"WebKey", account_web_key);
+    return 1;
+}
+
+/* Asks the server to befriend "Name#12345"; `message` is the server's answer for the
+   player either way (friends once both added each other). */
+int azimuth_account_add_friend(const wchar_t *gamertag, wchar_t *message, size_t cap) {
+    static char reply[1024], body[96], text[400];
+    char tag[32];
+    wide_to_ascii(gamertag, tag, sizeof(tag));
+    /* Name#12345 only: letters, digits and one '#' (no JSON escaping needed) */
+    for (const char *p = tag; *p; ++p) {
+        if (!((*p >= 'A' && *p <= 'Z') || (*p >= 'a' && *p <= 'z') || (*p >= '0' && *p <= '9') || *p == '#')) {
+            utf8_to_wide("Use o formato Nome#12345.", message, cap);
+            return 0;
+        }
+    }
+    body[0] = 0;
+    text_add(body, sizeof(body), "{\"gamertag\":\"");
+    text_add(body, sizeof(body), tag);
+    text_add(body, sizeof(body), "\"}");
+    DWORD status = azimuth_net_call(L"POST", L"/fh2online/v1/friends", account_token_header(), body, reply, sizeof(reply));
+    if (status == 200 && json_string(reply, "message", text, sizeof(text)) && text[0]) {
+        utf8_to_wide(text, message, cap);
+        return 1;
+    }
+    account_error(status, reply, message, cap);
+    return 0;
+}
+
+/* Whether the next start plays as the account (1) or as the offline profile (0). */
+void azimuth_account_set_online(int online) {
+    memory_copy(account_online, online ? L"1" : L"0", sizeof(L"1"));
+    account_write(L"Online", account_online);
+}
+
+/* Closes the game and opens azimuth.exe again (its launcher shows Start). */
+void azimuth_account_restart(void) {
+    static wchar_t exe[PATH_CAPACITY], folder[PATH_CAPACITY];
+    HMODULE kernel = GetModuleHandleW(L"kernel32.dll");
+    CreateProcessWFn create = kernel ? (CreateProcessWFn)(uintptr_t)GetProcAddress(kernel, "CreateProcessW") : 0;
+    DWORD n = GetModuleFileNameW(0, exe, PATH_CAPACITY);
+    if (create && n && n < PATH_CAPACITY) {
+        memory_copy(folder, exe, (n + 1) * sizeof(wchar_t));
+        while (n && folder[n - 1] != L'\\' && folder[n - 1] != L'/') {
+            --n;
+        }
+        folder[n] = 0;
+        STARTUPINFOW startup = {0};
+        PROCESS_INFORMATION process = {0};
+        startup.cb = sizeof(startup);
+        if (create(exe, 0, 0, 0, FALSE, 0, 0, folder, &startup, &process)) {
+            CloseHandle(process.hThread);
+            CloseHandle(process.hProcess);
+        }
+    }
+    log_append("ACCOUNT: restarting the game for the profile change.\r\n");
+    ExitProcess(0);
+}
+
 const wchar_t *azimuth_account_token(void) {
-    return account_ready && account_token[0] ? account_token : 0;
+    return account_ready && account_active && account_token[0] ? account_token : 0;
 }
 
 void azimuth_apply_account(const wchar_t *directory) {
-    static wchar_t ini[PATH_CAPACITY];
-    account_ready = 1;
     if (!azimuth_net_proxy_enabled() || !(account_server = azimuth_net_server_name())) {
         return;
     }
@@ -400,29 +526,31 @@ void azimuth_apply_account(const wchar_t *directory) {
     account_sleep = kernel ? (SleepFn)(uintptr_t)GetProcAddress(kernel, "Sleep") : 0;
     size_t n = wide_len(directory);
     if (!account_sleep || azimuth_host_build(account_host) != AZIMUTH_097 || n >= PATH_CAPACITY ||
-        !path_join(ini, directory, MOD_INI_NAME) || !path_join(account_file, directory, ACCOUNT_FILE)) {
-        log_append("ACCOUNT: unsupported host or paths; playing without an FH2Online account.\r\n");
+        !path_join(account_file, directory, ACCOUNT_FILE)) {
+        log_append("ACCOUNT: unsupported host or paths; FH2Online accounts unavailable.\r\n");
         return;
     }
     memory_copy(account_directory, directory, (n + 1) * sizeof(wchar_t));
-    GetPrivateProfileStringW(L"Account", L"Name", L"", account_name, ARRAY_COUNT(account_name), ini);
+    if (!account_fingerprint()) {
+        log_append("ACCOUNT: no fingerprint for this PC; FH2Online accounts unavailable.\r\n");
+        return;
+    }
+    account_available = 1;
     GetPrivateProfileStringW(account_server, L"Token", L"", account_token, ARRAY_COUNT(account_token), account_file);
     GetPrivateProfileStringW(account_server, L"Xuid", L"", account_xuid, ARRAY_COUNT(account_xuid), account_file);
     GetPrivateProfileStringW(account_server, L"Gamertag", L"", account_gamertag, ARRAY_COUNT(account_gamertag),
                              account_file);
-    if (!account_token[0] && !account_name[0]) {
-        log_append("ACCOUNT: no account on this server; set [Account] Name to create one.\r\n");
+    GetPrivateProfileStringW(account_server, L"WebKey", L"", account_web_key, ARRAY_COUNT(account_web_key),
+                             account_file);
+    GetPrivateProfileStringW(account_server, L"Online", L"1", account_online, ARRAY_COUNT(account_online),
+                             account_file);
+    account_log("fingerprint #", account_discriminator);
+    if (!account_token[0]) {
+        log_append("ACCOUNT: no account on this server yet (Configurações > Multiplayer creates one).\r\n");
         return;
     }
-    if (account_name[0] && !valid_name(account_name)) {
-        log_append("ACCOUNT: [Account] Name must be 1-9 letters or digits starting with a letter.\r\n");
-        account_name[0] = 0;
-        if (!account_token[0]) {
-            return;
-        }
-    }
-    if (!account_fingerprint()) {
-        log_append("ACCOUNT: no fingerprint for this PC; playing without an FH2Online account.\r\n");
+    if (account_online[0] != L'1') {
+        log_append("ACCOUNT: account kept but Online=0; playing the offline profile.\r\n");
         return;
     }
     int patched = account_patch_slot(ACCOUNT_XUID_SLOT, ACCOUNT_XUID_TARGET, account_get_xuid, &account_xuid_original);
@@ -431,7 +559,7 @@ void azimuth_apply_account(const wchar_t *directory) {
                                       &account_info_original[i]);
     }
     if (patched != 4) {
-        log_append("ACCOUNT: LocalUser getters not where expected; playing without an FH2Online account.\r\n");
+        log_append("ACCOUNT: LocalUser getters not where expected; playing the offline profile.\r\n");
         return;
     }
     account_ready = 0;
@@ -441,5 +569,4 @@ void azimuth_apply_account(const wchar_t *directory) {
         return;
     }
     CloseHandle(thread);
-    account_log("fingerprint #", account_discriminator);
 }
