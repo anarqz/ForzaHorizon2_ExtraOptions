@@ -3063,6 +3063,172 @@ static void net_install_trace(void) {
                    : "XBL: fake token installed on only some User slots.\r\n");
 }
 
+/* ------------------------------------------------------- economy probe */
+/* Diagnostic: the offline defaults of ForzaEconomyModule (CreditsPerKm, XPPerKm*,
+   TombolaPrizeScale...), needed to answer User.GetEconomySettings without changing
+   the game's economy. The property getters are tiny (CreditsPerKm at game+0x3ee230
+   is "mov eax,[rdx+0x288]; ret"), so the getter is redirected to this function with
+   the same signature: it logs the object it is asked about (first few distinct
+   ones, since identical getters are folded across classes) and returns the same
+   value the original would. */
+
+#define NET_ECONOMY_GETTER_RVA 0x3ee230u
+#define NET_ECONOMY_MAX_LOGGED 4
+static const unsigned char net_economy_getter_bytes[16] = {0x8b, 0x82, 0x88, 0x02, 0x00, 0x00,
+                                                          0xc3, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc,
+                                                          0xcc, 0xcc, 0xcc, 0xcc};
+static unsigned char *volatile net_economy_seen[NET_ECONOMY_MAX_LOGGED];
+static volatile LONG net_economy_count;
+
+static int buffer_append_hex(Buffer *out, unsigned long long value, unsigned digits) {
+    static const char hex[] = "0123456789abcdef";
+    char text[16];
+    if (digits > sizeof(text)) {
+        digits = sizeof(text);
+    }
+    for (unsigned i = 0; i < digits; ++i) {
+        text[i] = hex[(value >> (4 * (digits - 1 - i))) & 15];
+    }
+    return buffer_append(out, text, digits);
+}
+
+/* Floats as fixed point with 4 decimals (no CRT printf here). */
+static int buffer_append_float(Buffer *out, float value) {
+    if (value != value) {
+        return buffer_append_text(out, "nan");
+    }
+    if (value < 0) {
+        if (!buffer_append(out, "-", 1)) {
+            return 0;
+        }
+        value = -value;
+    }
+    if (value > 1e15f) {
+        return buffer_append_text(out, "huge");
+    }
+    /* via signed: float -> unsigned 64-bit would need libgcc's __fixunssfdi */
+    unsigned long long scaled = (unsigned long long)(long long)(value * 10000.0f + 0.5f);
+    char frac[5];
+    unsigned long long f = scaled % 10000;
+    for (int i = 3; i >= 0; --i) {
+        frac[i] = (char)('0' + f % 10);
+        f /= 10;
+    }
+    frac[4] = 0;
+    return buffer_append_number(out, scaled / 10000) && buffer_append(out, ".", 1) &&
+           buffer_append(out, frac, 4);
+}
+
+static void net_economy_log(unsigned char *object) {
+    static const struct {
+        const char *name;
+        unsigned offset;
+        char kind; /* i int, f float, b byte */
+    } fields[] = {{"RetrievalAttemptInterval", 0x120, 'f'}, {"RetrievalMaxRetryTime", 0x140, 'f'},
+                  {"DownloadFailedBackoffRate", 0x160, 'f'}, {"UseServerValues", 0x1e8, 'b'},
+                  {"CreditDestinationBonus", 0x208, 'i'},  {"CreditDestinationFalloff", 0x228, 'i'},
+                  {"XPPerKmOffline", 0x248, 'i'},           {"XPPerKmOnline", 0x268, 'i'},
+                  {"CreditsPerKm", 0x288, 'i'},             {"MinimumFinishlineXP", 0x2a8, 'i'},
+                  {"SubmitXpFrequency", 0x2c8, 'i'},        {"TombolaPrizeScale", 0x2e8, 'f'},
+                  {"HorizonPromoBonusScale", 0x308, 'f'},   {"TokensEnabled", 0x328, 'b'},
+                  {"XboxMusicEnabled", 0x348, 'b'},          {"DownloadedEconomyValues", 0x351, 'b'}};
+    Buffer line = {0};
+    int ok = buffer_append_text(&line, "ECONOMY: CreditsPerKm getter called for object 0x") &&
+             buffer_append_hex(&line, (unsigned long long)(uintptr_t)object, 16) &&
+             buffer_append_text(&line, "\r\n");
+    for (unsigned i = 0; ok && i < ARRAY_COUNT(fields); ++i) {
+        unsigned char raw[4] = {0};
+        if (!memory_read(object + fields[i].offset, raw, sizeof(raw))) {
+            ok = buffer_append_text(&line, "ECONOMY:   <unreadable>\r\n");
+            break;
+        }
+        ok = buffer_append_text(&line, "ECONOMY:   ") && buffer_append_text(&line, fields[i].name) &&
+             buffer_append_text(&line, " = ");
+        if (!ok) {
+            break;
+        }
+        if (fields[i].kind == 'i') {
+            int value;
+            memory_copy(&value, raw, sizeof(value));
+            if (value < 0) {
+                ok = buffer_append(&line, "-", 1) && buffer_append_number(&line, (unsigned)-value);
+            } else {
+                ok = buffer_append_number(&line, (unsigned)value);
+            }
+        } else if (fields[i].kind == 'f') {
+            float value;
+            memory_copy(&value, raw, sizeof(value));
+            ok = buffer_append_float(&line, value);
+        } else {
+            ok = buffer_append_number(&line, raw[0]);
+        }
+        ok = ok && buffer_append_text(&line, "\r\n");
+    }
+    /* Raw dump of the property block, to check the offsets above. */
+    for (unsigned row = 0x100; ok && row < 0x360; row += 0x20) {
+        unsigned long long q[4] = {0, 0, 0, 0};
+        if (!memory_read(object + row, q, sizeof(q))) {
+            break;
+        }
+        ok = buffer_append_text(&line, "ECONOMY:   +") && buffer_append_hex(&line, row, 3);
+        for (unsigned k = 0; ok && k < 4; ++k) {
+            ok = buffer_append(&line, " ", 1) && buffer_append_hex(&line, q[k], 16);
+        }
+        ok = ok && buffer_append_text(&line, "\r\n");
+    }
+    if (ok) {
+        log_append((const char *)line.data);
+    }
+    buffer_free(&line);
+}
+
+/* Same signature as the getter: (rcx = property descriptor, rdx = object). */
+static int net_economy_getter(void *descriptor, unsigned char *object) {
+    (void)descriptor;
+    if (net_economy_count < NET_ECONOMY_MAX_LOGGED) {
+        int known = 0;
+        for (LONG i = 0; i < NET_ECONOMY_MAX_LOGGED; ++i) {
+            if (net_economy_seen[i] == object) {
+                known = 1;
+                break;
+            }
+        }
+        if (!known) {
+            LONG slot = InterlockedIncrement(&net_economy_count) - 1;
+            if (slot < NET_ECONOMY_MAX_LOGGED) {
+                net_economy_seen[slot] = object;
+                net_economy_log(object);
+            }
+        }
+    }
+    int value;
+    memory_copy(&value, object + 0x288, sizeof(value));
+    return value;
+}
+
+void azimuth_apply_economy_probe(unsigned char *game_image) {
+    unsigned char *at = game_image + NET_ECONOMY_GETTER_RVA;
+    unsigned char current[16];
+    if (!memory_read(at, current, sizeof(current)) ||
+        !memory_equal(current, net_economy_getter_bytes, sizeof(current))) {
+        log_append("ECONOMY: probe not installed (unexpected getter bytes).\r\n");
+        return;
+    }
+    /* mov rax, imm64 ; jmp rax  (12 bytes, inside the 16 the getter + padding own) */
+    unsigned char jump[12] = {0x48, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xe0};
+    uintptr_t target = (uintptr_t)net_economy_getter;
+    memory_copy(jump + 2, &target, sizeof(target));
+    DWORD old_protection, ignored;
+    if (!VirtualProtect(at, sizeof(jump), PAGE_EXECUTE_READWRITE, &old_protection)) {
+        log_append("ECONOMY: probe not installed (VirtualProtect failed).\r\n");
+        return;
+    }
+    memory_copy(at, jump, sizeof(jump));
+    FlushInstructionCache(GetCurrentProcess(), at, sizeof(jump));
+    VirtualProtect(at, sizeof(jump), old_protection, &ignored);
+    log_append("ECONOMY: probe installed on the CreditsPerKm getter; values are logged on first use.\r\n");
+}
+
 void azimuth_apply_network(const wchar_t *directory) {
     net_read_settings(directory);
     if (net_mode == NET_MODE_OFF) {
