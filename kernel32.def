@@ -12,6 +12,7 @@ EXPORTS
     GetSystemInfo
     ReadFile
     SetLastError
+    VirtualAlloc
     VirtualProtect
     WriteFile
     ReadProcessMemory

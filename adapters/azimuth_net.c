@@ -3206,7 +3206,97 @@ static int net_economy_getter(void *descriptor, unsigned char *object) {
     return value;
 }
 
+/* Plan B: the getter above is never called (the game reads the fields directly).
+   FUN_140561000 sends User.GetEconomySettings on every retry and gets the module in
+   rcx, so its entry jumps to a trampoline that logs the object once, runs the 16
+   original bytes (push rbx; sub rsp,20h; mov rbx,rcx; add rcx,168h - nothing
+   RIP-relative) and jumps back to game+0x561010. */
+#define NET_ECONOMY_REQUEST_RVA 0x561000u
+static const unsigned char net_economy_request_bytes[16] = {0x40, 0x53, 0x48, 0x83, 0xec, 0x20,
+                                                           0x48, 0x8b, 0xd9, 0x48, 0x81, 0xc1,
+                                                           0x68, 0x01, 0x00, 0x00};
+static volatile LONG net_economy_dumped;
+
+static void net_economy_dump(unsigned char *module) {
+    if (InterlockedCompareExchange(&net_economy_dumped, 1, 0)) {
+        return;
+    }
+    Buffer line = {0};
+    int ok = buffer_append_text(&line, "ECONOMY: GetEconomySettings request from module 0x") &&
+             buffer_append_hex(&line, (unsigned long long)(uintptr_t)module, 16) &&
+             buffer_append_text(&line, " (raw +000..+400, qwords)\r\n");
+    for (unsigned row = 0; ok && row < 0x400; row += 0x20) {
+        unsigned long long q[4] = {0, 0, 0, 0};
+        if (!memory_read(module + row, q, sizeof(q))) {
+            ok = buffer_append_text(&line, "ECONOMY:   <unreadable>\r\n");
+            break;
+        }
+        ok = buffer_append_text(&line, "ECONOMY:   +") && buffer_append_hex(&line, row, 3);
+        for (unsigned k = 0; ok && k < 4; ++k) {
+            ok = buffer_append(&line, " ", 1) && buffer_append_hex(&line, q[k], 16);
+        }
+        ok = ok && buffer_append_text(&line, "\r\n");
+    }
+    if (ok) {
+        log_append((const char *)line.data);
+    }
+    buffer_free(&line);
+}
+
+static void net_install_economy_request_probe(unsigned char *game_image) {
+    unsigned char *at = game_image + NET_ECONOMY_REQUEST_RVA;
+    unsigned char current[16];
+    if (!memory_read(at, current, sizeof(current)) ||
+        !memory_equal(current, net_economy_request_bytes, sizeof(current))) {
+        log_append("ECONOMY: request probe not installed (unexpected bytes).\r\n");
+        return;
+    }
+    unsigned char *tramp = VirtualAlloc(NULL, 4096, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
+    if (!tramp) {
+        log_append("ECONOMY: request probe not installed (no trampoline memory).\r\n");
+        return;
+    }
+    /* entry rsp = 8 mod 16; 4 pushes keep it; sub 28h aligns it with shadow space */
+    static const unsigned char save[] = {0x51, 0x52, 0x41, 0x50, 0x41, 0x51, 0x48, 0x83, 0xec, 0x28};
+    static const unsigned char restore[] = {0x48, 0x83, 0xc4, 0x28, 0x41, 0x59, 0x41, 0x58, 0x5a, 0x59};
+    unsigned n = 0;
+    uintptr_t dump = (uintptr_t)net_economy_dump, back = (uintptr_t)(at + sizeof(current));
+    memory_copy(tramp + n, save, sizeof(save));
+    n += sizeof(save);
+    tramp[n++] = 0x48; /* mov rax, imm64 ; call rax */
+    tramp[n++] = 0xb8;
+    memory_copy(tramp + n, &dump, 8);
+    n += 8;
+    tramp[n++] = 0xff;
+    tramp[n++] = 0xd0;
+    memory_copy(tramp + n, restore, sizeof(restore));
+    n += sizeof(restore);
+    memory_copy(tramp + n, current, sizeof(current)); /* the original 16 bytes */
+    n += sizeof(current);
+    tramp[n++] = 0x48; /* mov rax, imm64 ; jmp rax */
+    tramp[n++] = 0xb8;
+    memory_copy(tramp + n, &back, 8);
+    n += 8;
+    tramp[n++] = 0xff;
+    tramp[n++] = 0xe0;
+    FlushInstructionCache(GetCurrentProcess(), tramp, n);
+
+    unsigned char jump[16] = {0x48, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xe0, 0x90, 0x90, 0x90, 0x90};
+    uintptr_t target = (uintptr_t)tramp;
+    memory_copy(jump + 2, &target, sizeof(target));
+    DWORD old_protection, ignored;
+    if (!VirtualProtect(at, sizeof(jump), PAGE_EXECUTE_READWRITE, &old_protection)) {
+        log_append("ECONOMY: request probe not installed (VirtualProtect failed).\r\n");
+        return;
+    }
+    memory_copy(at, jump, sizeof(jump));
+    FlushInstructionCache(GetCurrentProcess(), at, sizeof(jump));
+    VirtualProtect(at, sizeof(jump), old_protection, &ignored);
+    log_append("ECONOMY: request probe installed; the module is dumped on the next GetEconomySettings.\r\n");
+}
+
 void azimuth_apply_economy_probe(unsigned char *game_image) {
+    net_install_economy_request_probe(game_image);
     unsigned char *at = game_image + NET_ECONOMY_GETTER_RVA;
     unsigned char current[16];
     if (!memory_read(at, current, sizeof(current)) ||
