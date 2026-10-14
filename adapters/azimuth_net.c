@@ -2630,6 +2630,18 @@ typedef HRESULT(STDMETHODCALLTYPE *NetShimCall)(NetCom *, uintptr_t, uintptr_t, 
                                                 uintptr_t, uintptr_t);
 static volatile LONG net_connectivity_logged;
 
+/* A profile the shim made up because Azimuth had none (inner is null): getters that only
+   take an out pointer answer null; the rest are not implemented. */
+static HRESULT net_shim_stand_alone(unsigned slot, uintptr_t out) {
+    if (slot == 12 || slot == 13) {
+        return NET_E_NOTIMPL;
+    }
+    if (out) {
+        *(void **)out = 0;
+    }
+    return S_OK;
+}
+
 static void *net_shim_slot(NetShim *self, unsigned slot) {
     return ((void *const *)(const void *)self->inner->lpVtbl)[slot];
 }
@@ -2639,6 +2651,9 @@ static void *net_shim_slot(NetShim *self, unsigned slot) {
 #define NET_SHIM_FORWARD(slot)                                                                 \
     static HRESULT STDMETHODCALLTYPE net_shim_forward##slot(                                   \
         NetShim *self, uintptr_t a, uintptr_t b, uintptr_t c, uintptr_t d, uintptr_t e) {       \
+        if (!self->inner) {                                                                    \
+            return net_shim_stand_alone(slot, a);                                              \
+        }                                                                                      \
         NetShimCall call = (NetShimCall)(uintptr_t)net_shim_slot(self, slot);                   \
         return call(self->inner, a, b, c, d, e);                                               \
     }
@@ -2666,7 +2681,8 @@ static HRESULT STDMETHODCALLTYPE net_shim_query(NetShim *self, REFIID iid, void 
         InterlockedIncrement(&self->references);
         return S_OK;
     }
-    return self->inner->lpVtbl->QueryInterface(self->inner, iid, out);
+    return self->inner ? self->inner->lpVtbl->QueryInterface(self->inner, iid, out)
+                       : E_NOINTERFACE;
 }
 
 static ULONG STDMETHODCALLTYPE net_shim_add_ref(NetShim *self) {
@@ -2676,7 +2692,9 @@ static ULONG STDMETHODCALLTYPE net_shim_add_ref(NetShim *self) {
 static ULONG STDMETHODCALLTYPE net_shim_release(NetShim *self) {
     LONG left = InterlockedDecrement(&self->references);
     if (!left) {
-        self->inner->lpVtbl->Release(self->inner);
+        if (self->inner) {
+            self->inner->lpVtbl->Release(self->inner);
+        }
         net_free(self);
     }
     return (ULONG)left;
@@ -2685,9 +2703,13 @@ static ULONG STDMETHODCALLTYPE net_shim_release(NetShim *self) {
 /* IConnectionProfile::GetNetworkConnectivityLevel */
 static HRESULT STDMETHODCALLTYPE net_profile_level(NetShim *self, int *level) {
     typedef HRESULT(STDMETHODCALLTYPE * Call)(NetCom *, int *);
-    Call call = (Call)(uintptr_t)net_shim_slot(self, 7);
-    HRESULT result = call(self->inner, level);
-    int original = level ? *level : -1;
+    HRESULT result = S_OK;
+    int original = -1;
+    if (self->inner) {
+        Call call = (Call)(uintptr_t)net_shim_slot(self, 7);
+        result = call(self->inner, level);
+        original = level ? *level : -1;
+    }
     if (level) {
         *level = NET_XBOX_LIVE_ACCESS;
     }
@@ -2710,8 +2732,29 @@ static NetShim *net_shim_wrap(NetCom *inner, void *const *vtable, const unsigned
 static HRESULT STDMETHODCALLTYPE net_netinfo_profile(NetShim *self, NetCom **out) {
     typedef HRESULT(STDMETHODCALLTYPE * Call)(NetCom *, NetCom **);
     Call call = (Call)(uintptr_t)net_shim_slot(self, 7);
+    if (!out) {
+        return E_POINTER;
+    }
+    *out = 0;
     HRESULT result = call(self->inner, out);
-    if (SUCCEEDED(result) && out && *out) {
+    static volatile LONG logged;
+    if (!InterlockedExchange(&logged, 1)) {
+        Buffer line = {0};
+        if (buffer_append_text(&line, "WINRT: Azimuth's GetInternetConnectionProfile -> ") &&
+            buffer_append_hresult(&line, result) &&
+            buffer_append_text(&line, *out ? ", a profile.\r\n" : ", no profile; using ours.\r\n")) {
+            log_append((const char *)line.data);
+        }
+        buffer_free(&line);
+    }
+    if (FAILED(result) || !*out) {
+        if (*out) {
+            (*out)->lpVtbl->Release(*out);
+        }
+        *out = 0;
+        result = S_OK;
+    }
+    {
         static void *const profile_vtable[15] = {
             (void *)(uintptr_t)net_shim_query,     (void *)(uintptr_t)net_shim_add_ref,
             (void *)(uintptr_t)net_shim_release,   (void *)(uintptr_t)net_shim_forward3,
