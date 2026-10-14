@@ -929,11 +929,11 @@ DWORD azimuth_net_request(const wchar_t *method, const wchar_t *path, const wcha
     return net_request(method, path, headers, content_type, body, body_size, out, capacity, received, 0);
 }
 
-/* Whether the server answers /fh2online/v1/info within timeout_ms (the pause menu's check). */
+/* Whether the server answers /infinity/v1/info within timeout_ms (the pause menu's check). */
 int azimuth_net_ping(int timeout_ms) {
     char reply[256];
     size_t got = 0;
-    return net_request(L"GET", L"/fh2online/v1/info", 0, L"application/json", 0, 0, reply, sizeof(reply), &got,
+    return net_request(L"GET", L"/infinity/v1/info", 0, L"application/json", 0, 0, reply, sizeof(reply), &got,
                        timeout_ms) == 200;
 }
 

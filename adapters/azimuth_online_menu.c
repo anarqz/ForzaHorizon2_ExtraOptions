@@ -308,21 +308,19 @@ static void menu_show_created(void) {
     line_add(L"\nSite key: ");
     line_add(azimuth_account_web_key());
     line_add(L"\n\nUse your profile and this key to sign in to the server's site. The key is kept in "
-             L"Settings > Infinity.\n\nThe game will close and open again on the online profile, straight in "
-             L"the open world with your car: the intro and first championship are done, and online, clubs and "
-             L"rivals are open. Your offline progress stays saved.");
+             L"Settings > Infinity.\n\nThe game will close and open again on the online profile, which goes on "
+             L"from your offline progress: your cars, credits and level came with you. Your offline save stays as "
+             L"it is.");
     menu_popup(L"PROFILE CREATED", menu_line, restart, 1);
 }
 
-/* Create profile: the first car (one of the game's own three), then the name. */
-static int menu_starter_car;
-
+/* Create profile: the name; the profile starts from the player's newest offline save. */
 static void menu_name_typed(const wchar_t *name) {
     static wchar_t error[400];
     if (!name[0]) {
         return; /* keyboard cancelled */
     }
-    if (!azimuth_account_register(name, menu_starter_car, error, ARRAY_COUNT(error))) {
+    if (!azimuth_account_register(name, error, ARRAY_COUNT(error))) {
         menu_info(L"INFINITY", error);
         return;
     }
@@ -333,31 +331,8 @@ static void menu_ask_name(void) {
     line_start();
     line_add(L"1 to 9 letters or digits, starting with a letter. It will read Name#");
     line_add(azimuth_account_discriminator());
-    line_add(L".");
+    line_add(L". The profile starts from your offline progress.");
     menu_keyboard(L"Online profile name", menu_line, 9, menu_name_typed);
-}
-
-static void menu_car_camaro(void) {
-    menu_starter_car = 289;
-    menu_ask_name();
-}
-static void menu_car_supra(void) {
-    menu_starter_car = 461;
-    menu_ask_name();
-}
-static void menu_car_z4(void) {
-    menu_starter_car = 1218;
-    menu_ask_name();
-}
-
-static void menu_pick_car(void) {
-    static const MenuButton cars[3] = {{L"1969 Chevrolet Camaro SS", menu_car_camaro},
-                                       {L"1998 Toyota Supra RZ", menu_car_supra},
-                                       {L"2011 BMW Z4 sDrive35is", menu_car_z4}};
-    menu_popup(L"CHOOSE YOUR CAR",
-               L"Your new profile starts in the open world, past the intro and the first championship, with "
-               L"online, clubs and rivals open.\n\nPick the car you start with:",
-               cars, 3);
 }
 
 /* Entrar com perfil: Name#12345, then the site key (a popup in between: a keyboard is not
@@ -429,12 +404,42 @@ static void menu_leave(void) {
     azimuth_account_restart();
 }
 
+static void menu_deleted(void) {
+    static const MenuButton restart[1] = {{L"Restart now", menu_restart}};
+    menu_popup(L"PROFILE DELETED",
+               L"Your online profile and everything it had on the server are gone. The game will close and open "
+               L"again on your offline profile, which was not touched.",
+               restart, 1);
+}
+
+static void menu_delete(void) {
+    static wchar_t error[400];
+    if (!azimuth_account_delete(error, ARRAY_COUNT(error))) {
+        menu_info(L"DELETE PROFILE", error);
+        return;
+    }
+    menu_deleted();
+}
+
+static void menu_confirm_delete(void) {
+    static const MenuButton buttons[2] = {{L"Delete forever", menu_delete}, {L"Back", menu_nothing}};
+    line_start();
+    line_add(L"This deletes ");
+    line_add(azimuth_account_gamertag());
+    line_add(L" from the server for good: its cloud save, stats, scores, ghosts, designs and shared files, "
+             L"clubs and all your friends. It cannot be undone.\n\nYour offline save stays on this PC.");
+    menu_popup(L"DELETE PROFILE", menu_line, buttons, 2);
+}
+
 static void menu_confirm_leave(void) {
-    static const MenuButton buttons[2] = {{L"Leave and restart", menu_leave}, {L"Back", menu_nothing}};
+    static const MenuButton buttons[3] = {{L"Leave and restart", menu_leave},
+                                          {L"Delete profile", menu_confirm_delete},
+                                          {L"Back", menu_nothing}};
     menu_popup(L"LEAVE INFINITY",
-               L"The game will restart on your offline profile. Your online profile stays saved and you can "
-               L"come back to it here anytime.",
-               buttons, 2);
+               L"Leaving restarts the game on your offline profile. Your online profile stays saved and you can "
+               L"come back to it here anytime.\n\nDelete profile removes your online profile from the server for "
+               L"good.",
+               buttons, 3);
 }
 
 static void menu_new_key(void) {
@@ -576,7 +581,7 @@ const InfinityTile *azimuth_infinity_tiles(void) {
         menu_set_tile(4, "ABOUT", "Icons/TiledMenus/Options.png", 0, menu_about);
     } else {
         menu_set_tile(0, "PROFILE", "PauseMenuTileBackgrounds/StartingGrid.png", 1, menu_profile);
-        menu_set_tile(1, "CREATE PROFILE", "PauseMenuTileBackgrounds/MyRivals.png", 1, menu_pick_car);
+        menu_set_tile(1, "CREATE PROFILE", "PauseMenuTileBackgrounds/MyRivals.png", 1, menu_ask_name);
         menu_set_tile(2, "SIGN IN", "PauseMenuTileBackgrounds/OnlineRoadtrip.png", 1, menu_log_in);
         menu_set_tile(3, "TEST CONNECTION", "Icons/TiledMenus/Options.png", 0, menu_test_connection);
         menu_set_tile(4, "ABOUT", "Icons/TiledMenus/TeamCredits.png", 0, menu_about);
@@ -605,7 +610,7 @@ static void menu_click(void *page) {
     menu_page = page;
     switch (azimuth_account_state()) {
     case 0: {
-        static const MenuButton buttons[3] = {{L"Create profile", menu_pick_car},
+        static const MenuButton buttons[3] = {{L"Create profile", menu_ask_name},
                                               {L"Sign in", menu_log_in},
                                               {L"Test connection", menu_test_connection}};
         line_start();

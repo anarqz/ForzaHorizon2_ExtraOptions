@@ -40,6 +40,8 @@ int azimuth_net_ping(int timeout_ms);
 /* azimuth_cloud.c: the online profile's save, kept on the server. */
 void azimuth_cloud_start(const wchar_t *bin, const wchar_t *xuid, const wchar_t *token, const wchar_t *ini,
                          const wchar_t *section);
+int azimuth_cloud_upload_offline(const wchar_t *bin, const wchar_t *token, const wchar_t *ini, const wchar_t *section,
+                                 const char **why);
 
 /* azimuth_account.c: the player's FH2Online account on that server. */
 void azimuth_apply_account(const wchar_t *directory);
@@ -51,7 +53,8 @@ const wchar_t *azimuth_account_web_key(void);
 const wchar_t *azimuth_account_discriminator(void);
 const wchar_t *azimuth_account_server(void);
 int azimuth_account_valid_name(const wchar_t *name);
-int azimuth_account_register(const wchar_t *name, int starter_car, wchar_t *message, size_t cap);
+int azimuth_account_register(const wchar_t *name, wchar_t *message, size_t cap);
+int azimuth_account_delete(wchar_t *message, size_t cap);
 int azimuth_account_new_web_key(wchar_t *message, size_t cap);
 int azimuth_account_add_friend(const wchar_t *gamertag, wchar_t *message, size_t cap);
 void azimuth_account_set_online(int online);

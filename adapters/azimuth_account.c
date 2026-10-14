@@ -374,7 +374,7 @@ static void account_error(DWORD status, const char *reply, wchar_t *message, siz
 static DWORD WINAPI account_thread(void *unused) {
     static char reply[2048], text[400], gamertag[32];
     (void)unused;
-    DWORD status = azimuth_net_call(L"GET", L"/fh2online/v1/me", account_token_header(), 0, reply, sizeof(reply));
+    DWORD status = azimuth_net_call(L"GET", L"/infinity/v1/me", account_token_header(), 0, reply, sizeof(reply));
     if (status == 200 && account_take(reply)) {
         account_active = 1;
         InterlockedExchange(&account_link, 1);
@@ -436,9 +436,11 @@ const wchar_t *azimuth_account_server(void) {
     return account_server ? account_server : L"";
 }
 
-/* Creates "name#12345" on the server (one account per PC). On success the account is kept
-   with Online=1, so the next start plays as it. */
-int azimuth_account_register(const wchar_t *name, int starter_car, wchar_t *message, size_t cap) {
+/* Creates "name#12345" on the server (one account per PC) from the player's offline progress:
+   the newest offline save becomes the profile's cloud save (azimuth_cloud_upload_offline). If
+   that fails the new account is deleted again, so no empty profile is left. On success the
+   account is kept with Online=1, so the next start plays as it. */
+int azimuth_account_register(const wchar_t *name, wchar_t *message, size_t cap) {
     static char reply[2048], body[256];
     char ascii[16];
     if (!account_available || !azimuth_account_valid_name(name)) {
@@ -453,28 +455,52 @@ int azimuth_account_register(const wchar_t *name, int starter_car, wchar_t *mess
     text_add(body, sizeof(body), account_discriminator);
     text_add(body, sizeof(body), "\",\"device\":\"");
     text_add(body, sizeof(body), account_device);
-    /* the first car (the server takes only the game's three) */
-    char car[12];
-    int digits = 0;
-    for (unsigned value = starter_car > 0 ? (unsigned)starter_car : 0; digits == 0 || value; value /= 10) {
-        car[digits++] = (char)('0' + value % 10);
-    }
-    text_add(body, sizeof(body), "\",\"starterCar\":");
-    while (digits) {
-        char one[2] = {car[--digits], 0};
-        text_add(body, sizeof(body), one);
-    }
-    text_add(body, sizeof(body), "}");
-    DWORD status = azimuth_net_call(L"POST", L"/fh2online/v1/register", 0, body, reply, sizeof(reply));
+    text_add(body, sizeof(body), "\"}");
+    DWORD status = azimuth_net_call(L"POST", L"/infinity/v1/register", 0, body, reply, sizeof(reply));
     if (status != 200 || !account_take(reply) || !account_token[0]) {
         account_error(status, reply, message, cap);
         account_token[0] = 0;
         return 0;
     }
+    const char *why = "";
+    if (!azimuth_cloud_upload_offline(account_directory, account_token, account_file, account_server, &why)) {
+        azimuth_net_call(L"POST", L"/infinity/v1/delete", account_token_header(), "{}", reply, sizeof(reply));
+        account_token[0] = 0;
+        account_log("profile not created, offline save not uploaded: ", why);
+        utf8_to_wide("Your offline progress could not be copied to the server, so the profile was not created. Play "
+                     "until the game saves, check the connection in Test connection, then try again.",
+                     message, cap);
+        return 0;
+    }
     memory_copy(account_online, L"1", sizeof(L"1"));
     account_save();
     wide_to_ascii(account_gamertag, ascii, sizeof(ascii));
-    account_log("created ", ascii);
+    account_log("created from the offline save: ", ascii);
+    return 1;
+}
+
+/* Deletes this PC's profile and everything it has on the server (POST /infinity/v1/delete:
+   saves, scores, designs, friends...). The offline save is not touched; the next start plays
+   it. */
+int azimuth_account_delete(wchar_t *message, size_t cap) {
+    static char reply[512];
+    if (!account_available || !account_token[0]) {
+        utf8_to_wide("There is no online profile on this PC.", message, cap);
+        return 0;
+    }
+    DWORD status = azimuth_net_call(L"POST", L"/infinity/v1/delete", account_token_header(), "{}", reply, sizeof(reply));
+    if (status != 200) {
+        account_error(status, reply, message, cap);
+        return 0;
+    }
+    char gamertag[32];
+    wide_to_ascii(account_gamertag, gamertag, sizeof(gamertag));
+    account_token[0] = account_xuid[0] = account_gamertag[0] = account_web_key[0] = 0;
+    memory_copy(account_online, L"0", sizeof(L"0"));
+    account_save();
+    account_write(L"SaveCommit", L"");
+    account_active = 0;
+    account_log("deleted by the player: ", gamertag);
     return 1;
 }
 
@@ -511,7 +537,7 @@ int azimuth_account_log_in(const wchar_t *gamertag, const wchar_t *web_key, wcha
     text_add(body, sizeof(body), "\"}");
     static wchar_t old_token[72];
     memory_copy(old_token, account_token, sizeof(account_token));
-    DWORD status = azimuth_net_call(L"POST", L"/fh2online/v1/login", 0, body, reply, sizeof(reply));
+    DWORD status = azimuth_net_call(L"POST", L"/infinity/v1/login", 0, body, reply, sizeof(reply));
     if (status != 200 || !account_take(reply) || !account_token[0] || wide_len(account_token) != 64) {
         account_error(status, reply, message, cap);
         memory_copy(account_token, old_token, sizeof(account_token));
@@ -558,7 +584,7 @@ void azimuth_account_test(wchar_t *out, size_t cap) {
     report_add(out, cap, L"Server: ");
     report_add(out, cap, azimuth_account_server());
     unsigned long long start = GetTickCount64();
-    DWORD status = azimuth_net_call(L"GET", L"/fh2online/v1/info", 0, 0, reply, sizeof(reply));
+    DWORD status = azimuth_net_call(L"GET", L"/infinity/v1/info", 0, 0, reply, sizeof(reply));
     unsigned long long took = GetTickCount64() - start;
     if (status != 200) {
         report_add(out, cap, status ? L"\nThe server answered with an error (HTTP " : L"\nNo answer from the server.");
@@ -577,7 +603,7 @@ void azimuth_account_test(wchar_t *out, size_t cap) {
         report_add(out, cap, L"\nProfile: none on this server yet.");
         return;
     }
-    status = azimuth_net_call(L"GET", L"/fh2online/v1/me", account_token_header(), 0, reply, sizeof(reply));
+    status = azimuth_net_call(L"GET", L"/infinity/v1/me", account_token_header(), 0, reply, sizeof(reply));
     if (status == 200) {
         report_add(out, cap, L"\nProfile ");
         report_add(out, cap, account_gamertag);
@@ -595,7 +621,7 @@ static DWORD WINAPI account_link_thread(void *unused) {
     static char reply[512];
     (void)unused;
     for (;;) {
-        DWORD status = azimuth_net_call(L"GET", L"/fh2online/v1/info", 0, 0, reply, sizeof(reply));
+        DWORD status = azimuth_net_call(L"GET", L"/infinity/v1/info", 0, 0, reply, sizeof(reply));
         InterlockedExchange(&account_link, status == 200 ? 1 : 2);
         account_sleep(15000);
     }
@@ -638,7 +664,7 @@ const wchar_t *azimuth_account_notice(void) {
 /* A new site key (the old one stops working). */
 int azimuth_account_new_web_key(wchar_t *message, size_t cap) {
     static char reply[1024], key[64];
-    DWORD status = azimuth_net_call(L"POST", L"/fh2online/v1/webkey", account_token_header(), "{}", reply, sizeof(reply));
+    DWORD status = azimuth_net_call(L"POST", L"/infinity/v1/webkey", account_token_header(), "{}", reply, sizeof(reply));
     if (status != 200 || !json_string(reply, "webKey", key, sizeof(key)) || !key[0]) {
         account_error(status, reply, message, cap);
         return 0;
@@ -665,7 +691,7 @@ int azimuth_account_add_friend(const wchar_t *gamertag, wchar_t *message, size_t
     text_add(body, sizeof(body), "{\"gamertag\":\"");
     text_add(body, sizeof(body), tag);
     text_add(body, sizeof(body), "\"}");
-    DWORD status = azimuth_net_call(L"POST", L"/fh2online/v1/friends", account_token_header(), body, reply, sizeof(reply));
+    DWORD status = azimuth_net_call(L"POST", L"/infinity/v1/friends", account_token_header(), body, reply, sizeof(reply));
     if (status == 200 && json_string(reply, "message", text, sizeof(text)) && text[0]) {
         utf8_to_wide(text, message, cap);
         return 1;

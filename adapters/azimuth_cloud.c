@@ -4,7 +4,7 @@
    Azimuth keeps a profile in data\saves\player-1\User_<XUID in hex>\revisions\<16 hex
    digits>\: a "commit" file (the SHA-256, size and name of each file under data\, checked when
    the game loads it) and data\*. A revision is bundled as is, each file compressed by
-   azimuth_codec.c ("FH2SAVE1", see server/src/db/saves.rs), and sent to PUT /fh2online/v1/save.
+   azimuth_codec.c ("FH2SAVE1", see server/src/db/saves.rs), and sent to PUT /infinity/v1/save.
    Uploads use method 2; downloads also take method 1, the XPRESS Huffman of ntdll that older
    hooks sent from Windows (Wine has neither, so the hook decodes both itself).
 
@@ -25,8 +25,8 @@
 #include "support.h"
 
 #define CLOUD_PATH 1024
-#define CLOUD_MAX_BUNDLE (2u << 20)
-#define CLOUD_MAX_FILE (32u << 20)
+#define CLOUD_MAX_BUNDLE (512u << 10) /* as the server takes (db/saves.rs) */
+#define CLOUD_MAX_FILE (8u << 20)
 #define CLOUD_POLL_MS 60000u
 
 typedef HANDLE(WINAPI *FindFirstFileWFn)(LPCWSTR, WIN32_FIND_DATAW *);
@@ -482,7 +482,7 @@ static int synced_is(const char *commit) {
 static int server_info(char commit[65]) {
     static char reply[512];
     size_t got = 0;
-    DWORD status = azimuth_net_request(L"GET", L"/fh2online/v1/save/info", cloud_headers, L"application/json", 0, 0,
+    DWORD status = azimuth_net_request(L"GET", L"/infinity/v1/save/info", cloud_headers, L"application/json", 0, 0,
                                        reply, sizeof(reply) - 1, &got);
     reply[got] = 0;
     if (status == 404) {
@@ -536,7 +536,7 @@ static int upload(const CloudRevision *revision) {
     headers[n] = 0;
     char reply[256];
     size_t got = 0;
-    DWORD status = azimuth_net_request(L"PUT", L"/fh2online/v1/save", headers, L"application/octet-stream", bundle,
+    DWORD status = azimuth_net_request(L"PUT", L"/infinity/v1/save", headers, L"application/octet-stream", bundle,
                                        size, reply, sizeof(reply) - 1, &got);
     cloud_free(bundle);
     if (status != 200) {
@@ -558,7 +558,7 @@ static int download(unsigned long long number) {
     if (!bundle) {
         return 0;
     }
-    DWORD status = azimuth_net_request(L"GET", L"/fh2online/v1/save", cloud_headers, L"application/json", 0, 0, bundle,
+    DWORD status = azimuth_net_request(L"GET", L"/infinity/v1/save", cloud_headers, L"application/json", 0, 0, bundle,
                                        CLOUD_MAX_BUNDLE, &size);
     wchar_t name[17], stamp[17];
     hex16(number, name);
@@ -613,6 +613,9 @@ static DWORD WINAPI cloud_watch(void *unused) {
 }
 
 static int cloud_resolve(void) {
+    if (cloud_workspace) {
+        return 1; /* resolved already */
+    }
     HMODULE kernel = GetModuleHandleW(L"kernel32.dll");
     if (!kernel) {
         return 0;
@@ -629,6 +632,39 @@ static int cloud_resolve(void) {
         return 0;
     }
     return (cloud_workspace = cloud_alloc(CODEC_LZ_WORK_SIZE)) != 0;
+}
+
+/* Creating a profile: the newest revision of the offline player's save (User_9000000000000,
+   Azimuth's own user, XUID 0x0009000000000000) becomes the new account's first cloud save, so
+   the online profile goes on from the player's offline progress. `bin`/`token`/`ini`/`section`
+   as for azimuth_cloud_start. Returns 1, or 0 with `why` saying what failed. */
+int azimuth_cloud_upload_offline(const wchar_t *bin, const wchar_t *token, const wchar_t *ini, const wchar_t *section,
+                                 const char **why) {
+    static wchar_t joined[CLOUD_PATH];
+    static CloudRevision offline;
+    if (!cloud_resolve()) {
+        *why = "system functions missing";
+        return 0;
+    }
+    if (!wjoin(joined, bin, L"\\..\\saves", 0) || !GetFullPathNameW(joined, CLOUD_PATH, cloud_saves, 0) ||
+        !wjoin(cloud_profile, cloud_saves, L"\\player-1\\User_9000000000000", 0) || wlen(ini) >= CLOUD_PATH ||
+        wlen(section) >= ARRAY_COUNT(cloud_section) || wlen(token) > 100) {
+        *why = "paths too long";
+        return 0;
+    }
+    wjoin(cloud_ini, ini, 0, 0);
+    wjoin(cloud_section, section, 0, 0);
+    wjoin(cloud_headers, L"X-Fh2-Token: ", token, 0);
+    newest_revision(&offline, 0);
+    if (!offline.found) {
+        *why = "no offline save";
+        return 0;
+    }
+    if (!upload(&offline)) {
+        *why = "the server did not take the save";
+        return 0;
+    }
+    return 1;
 }
 
 /* Called on the account thread once the server accepted the token, before the game opens the
