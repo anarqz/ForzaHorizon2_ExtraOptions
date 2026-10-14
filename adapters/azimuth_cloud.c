@@ -3,8 +3,10 @@
 
    Azimuth keeps a profile in data\saves\player-1\User_<XUID in hex>\revisions\<16 hex
    digits>\: a "commit" file (the SHA-256, size and name of each file under data\, checked when
-   the game loads it) and data\*. A revision is bundled as is, each file XPRESS-compressed by
-   ntdll ("FH2SAVE1", see server/src/db/saves.rs), and sent to PUT /fh2online/v1/save.
+   the game loads it) and data\*. A revision is bundled as is, each file compressed by
+   azimuth_codec.c ("FH2SAVE1", see server/src/db/saves.rs), and sent to PUT /fh2online/v1/save.
+   Uploads use method 2; downloads also take method 1, the XPRESS Huffman of ntdll that older
+   hooks sent from Windows (Wine has neither, so the hook decodes both itself).
 
    At start (on the account thread, before the game asks for the XUID and opens the save):
    - the server has the save this PC has: nothing to do;
@@ -16,6 +18,7 @@
    While playing, a thread uploads each new revision (checked every minute).
    A downloaded bundle is installed only if every file matches the commit's SHA-256 and size,
    and only the fixed file names below are ever written. */
+#include "azimuth_codec.h"
 #include "azimuth_host.h"
 #include "logging.h"
 #include "sha256.h"
@@ -25,11 +28,7 @@
 #define CLOUD_MAX_BUNDLE (2u << 20)
 #define CLOUD_MAX_FILE (32u << 20)
 #define CLOUD_POLL_MS 60000u
-#define CLOUD_FORMAT_XPRESS_HUFF 4
 
-typedef LONG(WINAPI *RtlCompressBufferFn)(USHORT, PUCHAR, ULONG, PUCHAR, ULONG, ULONG, PULONG, PVOID);
-typedef LONG(WINAPI *RtlDecompressBufferExFn)(USHORT, PUCHAR, ULONG, PUCHAR, ULONG, PULONG, PVOID);
-typedef LONG(WINAPI *RtlGetCompressionWorkSpaceSizeFn)(USHORT, PULONG, PULONG);
 typedef HANDLE(WINAPI *FindFirstFileWFn)(LPCWSTR, WIN32_FIND_DATAW *);
 typedef BOOL(WINAPI *FindNextFileWFn)(HANDLE, WIN32_FIND_DATAW *);
 typedef BOOL(WINAPI *FindCloseFn)(HANDLE);
@@ -43,9 +42,6 @@ static const char *const cloud_files[] = {"commit",          "data/BinarySaveSta
                                           "data/VersionFlags"};
 #define CLOUD_FILE_COUNT (sizeof(cloud_files) / sizeof(cloud_files[0]))
 
-static RtlCompressBufferFn cloud_compress;
-static RtlDecompressBufferExFn cloud_decompress;
-static RtlGetCompressionWorkSpaceSizeFn cloud_workspace_size;
 static FindFirstFileWFn cloud_find_first;
 static FindNextFileWFn cloud_find_next;
 static FindCloseFn cloud_find_close;
@@ -60,7 +56,7 @@ static wchar_t cloud_ini[CLOUD_PATH];
 static wchar_t cloud_section[300];
 static wchar_t cloud_headers[200];         /* X-Fh2-Token: ... */
 static wchar_t cloud_synced[72];           /* SaveCommit: what server and PC last agreed on */
-static void *cloud_workspace;
+static void *cloud_workspace;              /* codec_lz_encode's hash table */
 
 /* ------------------------------------------------------------- helpers */
 
@@ -330,19 +326,17 @@ static unsigned char *bundle_revision(const CloudRevision *revision, size_t *siz
         at += 2 + name_length;
         unsigned char *header = bundle + at;
         at += 9;
-        ULONG packed = 0;
+        size_t packed = 0;
         int method = 0;
         if (sizes[i] >= 64 && cloud_workspace &&
-            cloud_compress(CLOUD_FORMAT_XPRESS_HUFF, files[i], (ULONG)sizes[i], bundle + at, (ULONG)sizes[i], 4096,
-                           &packed, cloud_workspace) >= 0 &&
-            packed && packed < sizes[i]) {
-            method = 1;
+            (packed = codec_lz_encode(files[i], sizes[i], bundle + at, sizes[i] - 1, cloud_workspace)) != 0) {
+            method = 2;
         } else {
             memory_copy(bundle + at, files[i], sizes[i]);
-            packed = (ULONG)sizes[i];
+            packed = sizes[i];
         }
         put32(header, (unsigned)sizes[i]);
-        put32(header + 4, packed);
+        put32(header + 4, (unsigned)packed);
         header[8] = (unsigned char)method;
         at += packed;
     }
@@ -416,7 +410,7 @@ static unsigned long long install_bundle(const unsigned char *bundle, size_t siz
         unsigned raw = get32(bundle + at), stored = get32(bundle + at + 4);
         int method = bundle[at + 8];
         at += 9;
-        if (index < 0 || out[index] || raw > CLOUD_MAX_FILE || stored > size - at || method > 1 ||
+        if (index < 0 || out[index] || raw > CLOUD_MAX_FILE || stored > size - at || method > 2 ||
             (method == 0 && stored != raw)) {
             goto done;
         }
@@ -426,14 +420,9 @@ static unsigned long long install_bundle(const unsigned char *bundle, size_t siz
         }
         if (method == 0) {
             memory_copy(out[index], bundle + at, raw);
-        } else {
-            ULONG final = 0;
-            if (!cloud_workspace ||
-                cloud_decompress(CLOUD_FORMAT_XPRESS_HUFF, out[index], raw, (PUCHAR)(bundle + at), stored, &final,
-                                 cloud_workspace) < 0 ||
-                final != raw) {
-                goto done;
-            }
+        } else if (!(method == 1 ? codec_xpress_huffman_decode(bundle + at, stored, out[index], raw)
+                                 : codec_lz_decode(bundle + at, stored, out[index], raw))) {
+            goto done;
         }
         out_size[index] = raw;
         at += stored;
@@ -624,14 +613,10 @@ static DWORD WINAPI cloud_watch(void *unused) {
 }
 
 static int cloud_resolve(void) {
-    HMODULE ntdll = GetModuleHandleW(L"ntdll.dll"), kernel = GetModuleHandleW(L"kernel32.dll");
-    if (!ntdll || !kernel) {
+    HMODULE kernel = GetModuleHandleW(L"kernel32.dll");
+    if (!kernel) {
         return 0;
     }
-    cloud_compress = (RtlCompressBufferFn)(uintptr_t)GetProcAddress(ntdll, "RtlCompressBuffer");
-    cloud_decompress = (RtlDecompressBufferExFn)(uintptr_t)GetProcAddress(ntdll, "RtlDecompressBufferEx");
-    cloud_workspace_size =
-        (RtlGetCompressionWorkSpaceSizeFn)(uintptr_t)GetProcAddress(ntdll, "RtlGetCompressionWorkSpaceSize");
     cloud_find_first = (FindFirstFileWFn)(uintptr_t)GetProcAddress(kernel, "FindFirstFileW");
     cloud_find_next = (FindNextFileWFn)(uintptr_t)GetProcAddress(kernel, "FindNextFileW");
     cloud_find_close = (FindCloseFn)(uintptr_t)GetProcAddress(kernel, "FindClose");
@@ -639,16 +624,11 @@ static int cloud_resolve(void) {
     cloud_move = (MoveFileExWFn)(uintptr_t)GetProcAddress(kernel, "MoveFileExW");
     cloud_write_profile = (WritePrivateProfileStringWFn)(uintptr_t)GetProcAddress(kernel, "WritePrivateProfileStringW");
     cloud_sleep = (SleepFn)(uintptr_t)GetProcAddress(kernel, "Sleep");
-    if (!cloud_compress || !cloud_decompress || !cloud_workspace_size || !cloud_find_first || !cloud_find_next ||
-        !cloud_find_close || !cloud_create_directory || !cloud_move || !cloud_write_profile || !cloud_sleep) {
+    if (!cloud_find_first || !cloud_find_next || !cloud_find_close || !cloud_create_directory || !cloud_move ||
+        !cloud_write_profile || !cloud_sleep) {
         return 0;
     }
-    ULONG buffer = 0, fragment = 0;
-    if (cloud_workspace_size(CLOUD_FORMAT_XPRESS_HUFF, &buffer, &fragment) < 0 ||
-        !(cloud_workspace = cloud_alloc(buffer ? buffer : 1))) {
-        return 0;
-    }
-    return 1;
+    return (cloud_workspace = cloud_alloc(CODEC_LZ_WORK_SIZE)) != 0;
 }
 
 /* Called on the account thread once the server accepted the token, before the game opens the

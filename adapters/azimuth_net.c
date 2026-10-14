@@ -3686,6 +3686,32 @@ void azimuth_apply_economy_probe(unsigned char *game_image) {
     log_append("ECONOMY: probe installed on the CreditsPerKm getter; values are logged on first use.\r\n");
 }
 
+/* Game DVR clips: at a notable race moment (FUN_140562160, from nine places) the game records
+   a clip in a PPL task (FUN_14054e560 -> lambda FUN_140542b70) that activates
+   Windows.Xbox.Media.Capture.ApplicationClipCapture. Azimuth has no such class (0x80040154),
+   the task throws, nothing observes it and the runtime ends the game (0xc0000409 "an exception
+   a PPL task held that nothing observed"). The recorder returns at once instead. */
+#define NET_CLIP_RECORD_RVA 0x54e560u
+static const unsigned char net_clip_record_bytes[16] = {0x4c, 0x89, 0x4c, 0x24, 0x20, 0x48, 0x89, 0x54,
+                                                        0x24, 0x10, 0x55, 0x56, 0x57, 0x41, 0x54, 0x41};
+
+void azimuth_apply_no_game_clips(unsigned char *game_image) {
+    unsigned char *at = game_image + NET_CLIP_RECORD_RVA;
+    unsigned char current[16];
+    if (!memory_read(at, current, sizeof(current)) || !memory_equal(current, net_clip_record_bytes, sizeof(current))) {
+        log_append("CLIPS: recorder not as expected; left as is.\r\n");
+        return;
+    }
+    DWORD old_protection, ignored;
+    if (!VirtualProtect(at, 1, PAGE_EXECUTE_READWRITE, &old_protection)) {
+        return;
+    }
+    *at = 0xc3; /* ret */
+    FlushInstructionCache(GetCurrentProcess(), at, 1);
+    VirtualProtect(at, 1, old_protection, &ignored);
+    log_append("CLIPS: game clip recording off (no ApplicationClipCapture under Azimuth).\r\n");
+}
+
 void azimuth_apply_network(const wchar_t *directory) {
     net_read_settings(directory);
     if (net_mode == NET_MODE_OFF) {
