@@ -1,6 +1,6 @@
 /* FH2Online account: "name#12345" on the configured server.
 
-   The player creates it from the game (Configurações > Multiplayer, azimuth_online_menu.c):
+   The player creates it from the game (Configurações > Infinity, azimuth_online_menu.c):
    the 5 digits come from a fingerprint of this PC (SHA-256 of the Windows MachineGuid and the
    serial of the volume holding the mod). Only those 5 digits and a per-server device id
    (SHA-256 of the fingerprint + "host:port", so servers cannot match players up) leave the
@@ -14,8 +14,13 @@
      starts from zero and the offline save is left alone;
    - the gamertag / display names (LocalDisplayInfo slots 0x24ffe8, 0x24fff8, 0x250000) are
      read from Azimuth's player-name std::wstring (RVA 0x318c60), which is rewritten in place.
-   The token is checked on a thread; those getters wait for it (at most 10 s), so the game
-   never caches the old identity. Joining or leaving the online profile restarts the game. */
+   The token is checked on a thread, which then syncs the cloud save (azimuth_cloud.c); those
+   getters wait for it (at most 30 s), so the game never caches the old identity nor opens the
+   save before it is synced. Joining or leaving the online profile restarts the game.
+
+   Another PC: Configurações > Infinity > "Entrar com perfil" takes Name#12345 and the
+   site key; the server issues a new token and the PC that had the profile is logged out (its
+   next start finds the token refused, forgets it and says so in the menu). */
 #include "azimuth_host.h"
 #include "logging.h"
 #include "sha256.h"
@@ -26,7 +31,7 @@
 #define ACCOUNT_XUID_SLOT 0x24ff88u
 #define ACCOUNT_XUID_TARGET 0x23820u
 #define ACCOUNT_HSTRING_CREATE_RVA 0x86110u
-#define ACCOUNT_WAIT_MS 10000u
+#define ACCOUNT_WAIT_MS 30000u
 
 typedef HRESULT (*AccountGetterFn)(void *, void **);
 typedef HRESULT (*AccountHstringCreateFn)(const wchar_t *, unsigned, void **);
@@ -47,6 +52,7 @@ static unsigned char *account_host;
 static wchar_t account_directory[PATH_CAPACITY], account_file[PATH_CAPACITY];
 static const wchar_t *account_server;
 static volatile LONG account_ready = 1; /* token check finished (or not needed) */
+static volatile LONG account_link;      /* server: 0 not checked yet, 1 answering, 2 not answering */
 static int account_available;           /* fingerprint and paths ready: the menu can work */
 static int account_active;              /* this session plays as the account */
 static wchar_t account_token[72];
@@ -57,6 +63,7 @@ static wchar_t account_online[4];
 static char account_discriminator[6];
 static wchar_t account_discriminator_wide[6];
 static char account_device[65];
+static wchar_t account_notice[200]; /* shown by the menu, e.g. "logged in elsewhere" */
 static SleepFn account_sleep;
 
 /* ------------------------------------------------------------------ text */
@@ -369,7 +376,22 @@ static DWORD WINAPI account_thread(void *unused) {
     DWORD status = azimuth_net_call(L"GET", L"/fh2online/v1/me", account_token_header(), 0, reply, sizeof(reply));
     if (status == 200 && account_take(reply)) {
         account_active = 1;
-    } else if (status == 401 || status == 403) {
+        InterlockedExchange(&account_link, 1);
+        azimuth_cloud_start(account_directory, account_xuid, account_token, account_file, account_server);
+    } else if (status == 401) {
+        /* the profile logged in on another PC (or the server forgot it): this token is dead */
+        utf8_to_wide("O perfil ", account_notice, ARRAY_COUNT(account_notice));
+        size_t n = wide_len(account_notice), g = wide_len(account_gamertag);
+        if (n + g + 1 < ARRAY_COUNT(account_notice)) {
+            memory_copy(account_notice + n, account_gamertag, (g + 1) * sizeof(wchar_t));
+        }
+        n = wide_len(account_notice);
+        utf8_to_wide(" foi conectado em outro PC. Para jogar com ele aqui, entre de novo com o nome e a chave do site.",
+                     account_notice + n, ARRAY_COUNT(account_notice) - n);
+        account_token[0] = 0;
+        account_write(L"Token", L"");
+        account_log("the server no longer knows this PC's token (logged in elsewhere); forgotten.", "");
+    } else if (status == 403) {
         json_string(reply, "error", text, sizeof(text));
         account_log("the server refused this PC's account; playing offline: ", text);
     } else {
@@ -442,6 +464,161 @@ int azimuth_account_register(const wchar_t *name, wchar_t *message, size_t cap) 
     wide_to_ascii(account_gamertag, ascii, sizeof(ascii));
     account_log("created ", ascii);
     return 1;
+}
+
+/* Logs this PC in to an existing profile (Name#12345 + site key). The server issues a new
+   token and a new site key; the PC that had the profile is logged out. The next start
+   downloads the profile's cloud save. */
+int azimuth_account_log_in(const wchar_t *gamertag, const wchar_t *web_key, wchar_t *message, size_t cap) {
+    static char reply[2048], body[160];
+    char tag[32], key[32];
+    wide_to_ascii(gamertag, tag, sizeof(tag));
+    wide_to_ascii(web_key, key, sizeof(key));
+    /* Name#12345 and K7QM-4XPA-9RT2: letters, digits, '#' and '-' only (no JSON escaping) */
+    for (const char *p = tag; *p; ++p) {
+        if (!((*p >= 'A' && *p <= 'Z') || (*p >= 'a' && *p <= 'z') || (*p >= '0' && *p <= '9') || *p == '#')) {
+            utf8_to_wide("Use o formato Nome#12345.", message, cap);
+            return 0;
+        }
+    }
+    for (const char *p = key; *p; ++p) {
+        if (!((*p >= 'A' && *p <= 'Z') || (*p >= 'a' && *p <= 'z') || (*p >= '0' && *p <= '9') || *p == '-')) {
+            utf8_to_wide("A chave do site tem letras, números e traços, como K7QM-4XPA-9RT2.", message, cap);
+            return 0;
+        }
+    }
+    if (!account_available) {
+        utf8_to_wide("O Infinity não está disponível neste PC.", message, cap);
+        return 0;
+    }
+    body[0] = 0;
+    text_add(body, sizeof(body), "{\"gamertag\":\"");
+    text_add(body, sizeof(body), tag);
+    text_add(body, sizeof(body), "\",\"webKey\":\"");
+    text_add(body, sizeof(body), key);
+    text_add(body, sizeof(body), "\"}");
+    static wchar_t old_token[72];
+    memory_copy(old_token, account_token, sizeof(account_token));
+    DWORD status = azimuth_net_call(L"POST", L"/fh2online/v1/login", 0, body, reply, sizeof(reply));
+    if (status != 200 || !account_take(reply) || !account_token[0] || wide_len(account_token) != 64) {
+        account_error(status, reply, message, cap);
+        memory_copy(account_token, old_token, sizeof(account_token));
+        return 0;
+    }
+    memory_copy(account_online, L"1", sizeof(L"1"));
+    account_save();
+    account_write(L"SaveCommit", L""); /* this PC never synced this profile */
+    account_notice[0] = 0;
+    wide_to_ascii(account_gamertag, tag, sizeof(tag));
+    account_log("logged in as ", tag);
+    return 1;
+}
+
+static void report_add(wchar_t *out, size_t cap, const wchar_t *text) {
+    size_t n = wide_len(out);
+    while (text && *text && n + 1 < cap) {
+        out[n++] = *text++;
+    }
+    out[n] = 0;
+}
+
+static void report_number(wchar_t *out, size_t cap, unsigned long long value) {
+    wchar_t digits[24];
+    int n = 0;
+    do {
+        digits[n++] = (wchar_t)(L'0' + value % 10);
+        value /= 10;
+    } while (value && n < 23);
+    wchar_t text[24];
+    for (int i = 0; i < n; ++i) {
+        text[i] = digits[n - 1 - i];
+    }
+    text[n] = 0;
+    report_add(out, cap, text);
+}
+
+/* Configurações > Infinity > Testar conexão: is the server up, how fast, and does it still
+   accept this PC's profile. */
+void azimuth_account_test(wchar_t *out, size_t cap) {
+    static char reply[1024], text[400];
+    static wchar_t wide[400];
+    out[0] = 0;
+    report_add(out, cap, L"Servidor: ");
+    report_add(out, cap, azimuth_account_server());
+    unsigned long long start = GetTickCount64();
+    DWORD status = azimuth_net_call(L"GET", L"/fh2online/v1/info", 0, 0, reply, sizeof(reply));
+    unsigned long long took = GetTickCount64() - start;
+    if (status != 200) {
+        report_add(out, cap, status ? L"\nO servidor respondeu com erro (HTTP " : L"\nSem resposta do servidor.");
+        if (status) {
+            report_number(out, cap, status);
+            report_add(out, cap, L").");
+        }
+        report_add(out, cap, L"\n\nConfira o endereço em FH2_ExtraOptions.ini ([Network] Server), se o servidor está "
+                             L"no ar e se o firewall do PC dele libera a porta.");
+        return;
+    }
+    report_add(out, cap, L"\nConectado: resposta em ");
+    report_number(out, cap, took);
+    report_add(out, cap, L" ms.");
+    if (!account_token[0]) {
+        report_add(out, cap, L"\nPerfil: nenhum neste servidor ainda.");
+        return;
+    }
+    status = azimuth_net_call(L"GET", L"/fh2online/v1/me", account_token_header(), 0, reply, sizeof(reply));
+    if (status == 200) {
+        report_add(out, cap, L"\nPerfil ");
+        report_add(out, cap, account_gamertag);
+        report_add(out, cap, account_active ? L": aceito, jogando online." : L": aceito (reinicie para jogar online).");
+    } else {
+        json_string(reply, "error", text, sizeof(text));
+        utf8_to_wide(text[0] ? text : "recusado.", wide, ARRAY_COUNT(wide));
+        report_add(out, cap, L"\nPerfil: ");
+        report_add(out, cap, wide);
+    }
+}
+
+/* Pings the server every 15 s for the pause menu's status line. */
+static DWORD WINAPI account_link_thread(void *unused) {
+    static char reply[512];
+    (void)unused;
+    for (;;) {
+        DWORD status = azimuth_net_call(L"GET", L"/fh2online/v1/info", 0, 0, reply, sizeof(reply));
+        InterlockedExchange(&account_link, status == 200 ? 1 : 2);
+        account_sleep(15000);
+    }
+}
+
+/* The pause menu's status line (ASCII/UTF-8, no XML specials) and its dot color; 0 when the
+   Infinity is not configured. */
+int azimuth_account_banner(char *out, size_t cap, const char **color) {
+    char tag[32];
+    out[0] = 0;
+    if (!account_available) {
+        return 0;
+    }
+    LONG link = account_link;
+    if (account_active && link != 2) {
+        wide_to_ascii(account_gamertag, tag, sizeof(tag));
+        text_add(out, cap, "INFINITY  |  CONECTADO  |  ");
+        text_add(out, cap, tag);
+        *color = "#3ddc84";
+    } else if (link == 2) {
+        text_add(out, cap, "INFINITY  |  SEM CONEXÃO COM O SERVIDOR");
+        *color = "#ff4f4f";
+    } else if (account_token[0]) {
+        text_add(out, cap, "INFINITY  |  PERFIL ONLINE DESATIVADO");
+        *color = "#9a9a9a";
+    } else {
+        text_add(out, cap, link == 1 ? "INFINITY  |  SERVIDOR ONLINE  |  CRIE SEU PERFIL EM CONFIGURAÇÕES"
+                                     : "INFINITY  |  VERIFICANDO O SERVIDOR...");
+        *color = link == 1 ? "#f5c400" : "#9a9a9a";
+    }
+    return 1;
+}
+
+const wchar_t *azimuth_account_notice(void) {
+    return account_notice;
 }
 
 /* A new site key (the old one stops working). */
@@ -536,6 +713,10 @@ void azimuth_apply_account(const wchar_t *directory) {
         return;
     }
     account_available = 1;
+    HANDLE link = CreateThread(0, 0, account_link_thread, 0, 0, 0);
+    if (link) {
+        CloseHandle(link);
+    }
     GetPrivateProfileStringW(account_server, L"Token", L"", account_token, ARRAY_COUNT(account_token), account_file);
     GetPrivateProfileStringW(account_server, L"Xuid", L"", account_xuid, ARRAY_COUNT(account_xuid), account_file);
     GetPrivateProfileStringW(account_server, L"Gamertag", L"", account_gamertag, ARRAY_COUNT(account_gamertag),
@@ -546,7 +727,7 @@ void azimuth_apply_account(const wchar_t *directory) {
                              account_file);
     account_log("fingerprint #", account_discriminator);
     if (!account_token[0]) {
-        log_append("ACCOUNT: no account on this server yet (Configurações > Multiplayer creates one).\r\n");
+        log_append("ACCOUNT: no account on this server yet (Configurações > Infinity creates one).\r\n");
         return;
     }
     if (account_online[0] != L'1') {

@@ -907,13 +907,30 @@ int azimuth_net_proxy_enabled(void) {
    Returns the HTTP status, 0 when the server could not be reached. */
 DWORD azimuth_net_call(const wchar_t *method, const wchar_t *path, const wchar_t *extra_header,
                        const char *body, char *out, size_t capacity) {
+    size_t used = 0;
+    DWORD status = azimuth_net_request(method, path, extra_header, L"application/json", body,
+                                       body ? text_length(body) : 0, out, capacity ? capacity - 1 : 0, &used);
+    if (out && capacity) {
+        out[used] = 0;
+    }
+    return status;
+}
+
+/* As azimuth_net_call with a binary body: `headers` is NULL or "Name: value" lines joined by
+   \r\n; the reply is copied as is to `out` (up to `capacity` bytes, `*received` set to how
+   many). */
+DWORD azimuth_net_request(const wchar_t *method, const wchar_t *path, const wchar_t *headers,
+                          const wchar_t *content_type, const void *body, size_t body_size, void *out,
+                          size_t capacity, size_t *received) {
+    wchar_t type_header[96]; /* several threads call this at once */
     HINTERNET session = 0, connection = 0, http = 0;
     DWORD status = 0, status_size = sizeof(status), size = 0;
     size_t used = 0;
-    if (out && capacity) {
-        out[0] = 0;
+    unsigned char *bytes = out;
+    if (received) {
+        *received = 0;
     }
-    if (!net_load_winhttp()) {
+    if (!net_load_winhttp() || body_size > 0x7fffffffu) {
         return 0;
     }
     session = http_open(L"FH2Online/1", WINHTTP_ACCESS_TYPE_NO_PROXY, WINHTTP_NO_PROXY_NAME,
@@ -921,7 +938,7 @@ DWORD azimuth_net_call(const wchar_t *method, const wchar_t *path, const wchar_t
     if (!session) {
         goto done;
     }
-    http_set_timeouts(session, 5000, 5000, 10000, 10000);
+    http_set_timeouts(session, 5000, 5000, 30000, 30000);
     connection = http_connect(session, net_server_host, net_server_port, 0);
     http = connection ? http_open_request(connection, method, path, NULL, WINHTTP_NO_REFERER,
                                           WINHTTP_DEFAULT_ACCEPT_TYPES,
@@ -930,12 +947,20 @@ DWORD azimuth_net_call(const wchar_t *method, const wchar_t *path, const wchar_t
     if (!http) {
         goto done;
     }
-    http_add_headers(http, L"Content-Type: application/json", (DWORD)-1L, WINHTTP_ADDREQ_FLAG_ADD);
-    if (extra_header) {
-        http_add_headers(http, extra_header, (DWORD)-1L,
-                         WINHTTP_ADDREQ_FLAG_ADD | WINHTTP_ADDREQ_FLAG_REPLACE);
+    {
+        static const wchar_t prefix[] = L"Content-Type: ";
+        size_t n = ARRAY_COUNT(prefix) - 1, t = 0;
+        memory_copy(type_header, prefix, n * sizeof(wchar_t));
+        while (content_type && content_type[t] && n + 1 < ARRAY_COUNT(type_header)) {
+            type_header[n++] = content_type[t++];
+        }
+        type_header[n] = 0;
     }
-    size = body ? (DWORD)text_length(body) : 0;
+    http_add_headers(http, type_header, (DWORD)-1L, WINHTTP_ADDREQ_FLAG_ADD);
+    if (headers) {
+        http_add_headers(http, headers, (DWORD)-1L, WINHTTP_ADDREQ_FLAG_ADD | WINHTTP_ADDREQ_FLAG_REPLACE);
+    }
+    size = body ? (DWORD)body_size : 0;
     if (!http_send(http, WINHTTP_NO_ADDITIONAL_HEADERS, 0,
                    size ? (void *)body : WINHTTP_NO_REQUEST_DATA, size, size, 0) ||
         !http_receive(http, NULL) ||
@@ -951,18 +976,22 @@ DWORD azimuth_net_call(const wchar_t *method, const wchar_t *path, const wchar_t
             break;
         }
         char chunk[512];
-        if (available > sizeof(chunk)) {
-            available = sizeof(chunk);
+        if (used < capacity && bytes) {
+            /* straight into the caller's buffer */
+            DWORD room = capacity - used > 0x10000000u ? 0x10000000u : (DWORD)(capacity - used);
+            if (!http_read(http, bytes + used, available < room ? available : room, &read) || !read) {
+                break;
+            }
+            used += read;
+            continue;
         }
-        if (!http_read(http, chunk, available, &read) || !read) {
+        /* buffer full: drain the rest */
+        if (!http_read(http, chunk, available < sizeof(chunk) ? available : sizeof(chunk), &read) || !read) {
             break;
         }
-        for (DWORD i = 0; i < read && out && used + 1 < capacity; ++i) {
-            out[used++] = chunk[i];
-        }
     }
-    if (out && capacity) {
-        out[used] = 0;
+    if (received) {
+        *received = used;
     }
 done:
     if (http) {
