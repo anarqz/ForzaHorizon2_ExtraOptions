@@ -1,6 +1,6 @@
-/* Configurações > INFINITY: the FH2Online profile from the game's own UI.
+/* Settings > INFINITY: the FH2Online profile from the game's own UI.
 
-   azimuth_ui.c adds the INFINITY tile (PART_Button_Infinity) below CRÉDITOS on the
+   azimuth_ui.c adds the INFINITY tile (PART_Button_Infinity) below CREDITS on the
    pause-options page. When the page initializes (vtable slot 0x2e15940 -> FUN_140dc8a60, which
    binds each PART_Button_* to its handler with FUN_140d9fc10(page, name, &handler)), the
    INFINITY button is bound the same way to menu_click.
@@ -301,16 +301,16 @@ static void menu_restart(void) {
 }
 
 static void menu_show_created(void) {
-    static const MenuButton restart[1] = {{L"Reiniciar agora", menu_restart}};
+    static const MenuButton restart[1] = {{L"Restart now", menu_restart}};
     line_start();
-    line_add(L"Seu perfil online: ");
+    line_add(L"Your online profile: ");
     line_add(azimuth_account_gamertag());
-    line_add(L"\nChave do site: ");
+    line_add(L"\nSite key: ");
     line_add(azimuth_account_web_key());
-    line_add(L"\n\nUse o nome e a chave para entrar no site do servidor. A chave fica guardada em "
-             L"Configurações > Infinity.\n\nO jogo vai fechar e abrir de novo no perfil online, que começa do "
-             L"zero. Seu progresso offline continua salvo.");
-    menu_popup(L"PERFIL CRIADO", menu_line, restart, 1);
+    line_add(L"\n\nUse your profile and this key to sign in to the server's site. The key is kept in "
+             L"Settings > Infinity.\n\nThe game will close and open again on the online profile, which starts "
+             L"from scratch. Your offline progress stays saved.");
+    menu_popup(L"PROFILE CREATED", menu_line, restart, 1);
 }
 
 static void menu_name_typed(const wchar_t *name) {
@@ -327,10 +327,10 @@ static void menu_name_typed(const wchar_t *name) {
 
 static void menu_ask_name(void) {
     line_start();
-    line_add(L"De 1 a 9 letras ou números, começando com uma letra. Ficará como Nome#");
+    line_add(L"1 to 9 letters or digits, starting with a letter. It will read Name#");
     line_add(azimuth_account_discriminator());
     line_add(L".");
-    menu_keyboard(L"Nome do perfil online", menu_line, 9, menu_name_typed);
+    menu_keyboard(L"Online profile name", menu_line, 9, menu_name_typed);
 }
 
 /* Entrar com perfil: Name#12345, then the site key (a popup in between: a keyboard is not
@@ -338,15 +338,15 @@ static void menu_ask_name(void) {
 static wchar_t menu_login_tag[20];
 
 static void menu_show_logged_in(void) {
-    static const MenuButton restart[1] = {{L"Reiniciar agora", menu_restart}};
+    static const MenuButton restart[1] = {{L"Restart now", menu_restart}};
     line_start();
-    line_add(L"Você entrou como ");
+    line_add(L"Signed in as ");
     line_add(azimuth_account_gamertag());
-    line_add(L".\nNova chave do site: ");
+    line_add(L".\nNew site key: ");
     line_add(azimuth_account_web_key());
-    line_add(L"\n\nO jogo vai reiniciar e baixar o save do perfil guardado no servidor. O PC que estava "
-             L"conectado a este perfil foi desconectado, e a chave anterior deixou de funcionar.");
-    menu_popup(L"PERFIL CONECTADO", menu_line, restart, 1);
+    line_add(L"\n\nThe game will restart and download the profile's save from the server. The PC that was "
+             L"signed in to this profile has been signed out, and the previous key no longer works.");
+    menu_popup(L"PROFILE SIGNED IN", menu_line, restart, 1);
 }
 
 static void menu_key_typed(const wchar_t *key) {
@@ -355,21 +355,21 @@ static void menu_key_typed(const wchar_t *key) {
         return;
     }
     if (!azimuth_account_log_in(menu_login_tag, key, error, ARRAY_COUNT(error))) {
-        menu_info(L"ENTRAR COM PERFIL", error);
+        menu_info(L"SIGN IN", error);
         return;
     }
     menu_show_logged_in();
 }
 
 static void menu_ask_key(void) {
-    menu_keyboard(L"Chave do site",
-                  L"A chave aparece em Configurações > Infinity no PC onde o perfil está, no formato "
+    menu_keyboard(L"Site key",
+                  L"The key is shown in Settings > Infinity on the PC that has the profile, like "
                   L"K7QM-4XPA-9RT2.",
                   14, menu_key_typed);
 }
 
 static void menu_login_tag_typed(const wchar_t *tag) {
-    static const MenuButton next[1] = {{L"Digitar chave", menu_ask_key}};
+    static const MenuButton next[1] = {{L"Enter key", menu_ask_key}};
     size_t n = 0;
     if (!tag[0]) {
         return;
@@ -380,15 +380,15 @@ static void menu_login_tag_typed(const wchar_t *tag) {
     }
     menu_login_tag[n] = 0;
     line_start();
-    line_add(L"Perfil: ");
+    line_add(L"Profile: ");
     line_add(menu_login_tag);
-    line_add(L"\n\nAgora digite a chave do site desse perfil.");
-    menu_popup(L"ENTRAR COM PERFIL", menu_line, next, 1);
+    line_add(L"\n\nNow enter that profile's site key.");
+    menu_popup(L"SIGN IN", menu_line, next, 1);
 }
 
 static void menu_log_in(void) {
-    menu_keyboard(L"Entrar com perfil",
-                  L"Digite o perfil no formato Nome#12345. O PC onde ele está conectado será desconectado.", 15,
+    menu_keyboard(L"Sign in",
+                  L"Enter the profile as Name#12345. The PC it is signed in on will be signed out.", 15,
                   menu_login_tag_typed);
 }
 
@@ -403,24 +403,41 @@ static void menu_leave(void) {
 }
 
 static void menu_confirm_leave(void) {
-    static const MenuButton buttons[1] = {{L"Sair e reiniciar", menu_leave}};
-    menu_popup(L"SAIR DO INFINITY",
-               L"O jogo vai reiniciar no seu perfil offline. Seu perfil online continua guardado e você pode "
-               L"voltar a ele aqui quando quiser.",
-               buttons, 1);
+    static const MenuButton buttons[2] = {{L"Leave and restart", menu_leave}, {L"Back", menu_nothing}};
+    menu_popup(L"LEAVE INFINITY",
+               L"The game will restart on your offline profile. Your online profile stays saved and you can "
+               L"come back to it here anytime.",
+               buttons, 2);
 }
 
 static void menu_new_key(void) {
     static wchar_t error[400];
     if (!azimuth_account_new_web_key(error, ARRAY_COUNT(error))) {
-        menu_info(L"CHAVE DO SITE", error);
+        menu_info(L"SITE KEY", error);
         return;
     }
     line_start();
-    line_add(L"Nova chave do site: ");
+    line_add(L"New site key: ");
     line_add(azimuth_account_web_key());
-    line_add(L"\n\nA chave anterior deixou de funcionar.");
-    menu_info(L"CHAVE DO SITE", menu_line);
+    line_add(L"\n\nThe previous key no longer works.");
+    menu_info(L"SITE KEY", menu_line);
+}
+
+/* The current key, and a new one only on request. */
+static void menu_show_key(void) {
+    static const MenuButton buttons[2] = {{L"New key", menu_new_key}, {L"Back", menu_nothing}};
+    line_start();
+    if (azimuth_account_web_key()[0]) {
+        line_add(L"Your site key: ");
+        line_add(azimuth_account_web_key());
+    } else {
+        line_add(L"This PC has no site key saved.");
+    }
+    line_add(L"\n\nUse your profile (");
+    line_add(azimuth_account_gamertag());
+    line_add(L") and this key to sign in to the server's site or to continue this profile on another PC.\n\n"
+             L"A new key makes the current one stop working.");
+    menu_popup(L"SITE KEY", menu_line, buttons, 2);
 }
 
 static void menu_friend_typed(const wchar_t *gamertag) {
@@ -429,13 +446,13 @@ static void menu_friend_typed(const wchar_t *gamertag) {
         return;
     }
     azimuth_account_add_friend(gamertag, message, ARRAY_COUNT(message));
-    menu_info(L"ADICIONAR AMIGO", message);
+    menu_info(L"ADD FRIEND", message);
 }
 
 static void menu_add_friend(void) {
-    menu_keyboard(L"Adicionar amigo",
-                  L"Digite o perfil do seu amigo no formato Nome#12345. Quando os dois se adicionarem, vocês viram "
-                  L"amigos e rivais nas corridas de fantasma.",
+    menu_keyboard(L"Add friend",
+                  L"Enter your friend's profile as Name#12345. Once you both add each other, you become friends "
+                  L"and rivals in ghost races.",
                   15, menu_friend_typed);
 }
 
@@ -443,80 +460,236 @@ static void menu_add_friend(void) {
 static void menu_test_connection(void) {
     static wchar_t report[600];
     azimuth_account_test(report, ARRAY_COUNT(report));
-    menu_info(L"TESTAR CONEXÃO", report);
+    menu_info(L"TEST CONNECTION", report);
 }
 
 static void menu_more(void) {
-    static const MenuButton buttons[3] = {{L"Nova chave do site", menu_new_key},
-                                          {L"Entrar com outro perfil", menu_log_in},
-                                          {L"Sair do Infinity", menu_confirm_leave}};
+    static const MenuButton buttons[3] = {{L"New site key", menu_new_key},
+                                          {L"Sign in to another profile", menu_log_in},
+                                          {L"Leave Infinity", menu_confirm_leave}};
     menu_popup(L"INFINITY",
-               L"A chave do site serve para entrar no site do servidor e para usar este perfil em outro PC. "
-               L"Gerar uma nova invalida a anterior.\n\nEntrar com outro perfil troca o perfil deste PC (o "
-               L"atual continua no servidor). Sair do Infinity reinicia o jogo no seu perfil offline.",
+               L"The site key signs you in to the server's site and lets you use this profile on another PC. "
+               L"A new one makes the previous one stop working.\n\nSigning in to another profile switches this "
+               L"PC's profile (the current one stays on the server). Leaving Infinity restarts the game on your "
+               L"offline profile.",
                buttons, 3);
 }
 
+static void menu_profile(void) {
+    line_start();
+    if (azimuth_account_state() == 2) {
+        line_add(L"Online profile: ");
+        line_add(azimuth_account_gamertag());
+        line_add(L"\nServer: ");
+        line_add(azimuth_account_server());
+        line_add(L"\nSite key: ");
+        line_add(azimuth_account_web_key()[0] ? azimuth_account_web_key() : L"(make a new one in Site key)");
+        line_add(L"\n\nYour progress is saved on the server: sign in with your profile and site key on another "
+                 L"PC to pick up where you left off.");
+    } else if (azimuth_account_state() == 1) {
+        line_add(L"You have the online profile ");
+        line_add(azimuth_account_gamertag());
+        line_add(L" on this server, but you are playing the offline profile.\n\nUse Join and restart to go back to it.");
+    } else {
+        if (azimuth_account_notice()[0]) {
+            line_add(azimuth_account_notice());
+            line_add(L"\n\n");
+        }
+        line_add(L"No online profile on this PC.\n\nA new profile will read Name#");
+        line_add(azimuth_account_discriminator());
+        line_add(L". Already have one? Use Sign in, with your profile and site key.");
+    }
+    menu_info(L"PROFILE", menu_line);
+}
+
+static void menu_about(void) {
+    line_start();
+    line_add(L"ForzaInfinity: ghost races between friends.\n\nAdd a friend by their profile (Name#12345). "
+             L"Once you both add each other you become rivals: your best times and ghosts show up in each "
+             L"other's races.\n\nServer: ");
+    line_add(azimuth_account_server());
+    menu_info(L"ABOUT INFINITY", menu_line);
+}
+
+/* ------------------------------------------------------- INFINITY screen */
+
+static InfinityTile menu_tiles[7];
+static MenuAction menu_tile_actions[7];
+
+static void menu_set_tile(int i, const char *heading, const char *icon, int photo, MenuAction action) {
+    menu_tiles[i].heading = heading;
+    menu_tiles[i].icon = icon;
+    menu_tiles[i].photo = photo;
+    menu_tile_actions[i] = action;
+}
+
+/* The tiles for the profile's state (slots: 0 tall photo, 1-2 wide, 3-6 small icons). The
+   actions are kept with them, so a click does what its tile said. */
+const InfinityTile *azimuth_infinity_tiles(void) {
+    int state = azimuth_account_state();
+    if (state < 0) {
+        return 0;
+    }
+    for (int i = 0; i < 7; ++i) {
+        menu_set_tile(i, 0, 0, 0, 0);
+    }
+    if (state == 2) {
+        menu_set_tile(0, "PROFILE", "PauseMenuTileBackgrounds/StartingGrid.png", 1, menu_profile);
+        menu_set_tile(1, "ADD FRIEND", "PauseMenuTileBackgrounds/MyRivals.png", 1, menu_add_friend);
+        menu_set_tile(2, "TEST CONNECTION", "PauseMenuTileBackgrounds/OnlineFreeroam.png", 1, menu_test_connection);
+        menu_set_tile(3, "SITE KEY", "Icons/TiledMenus/Options.png", 0, menu_show_key);
+        menu_set_tile(4, "SWITCH PROFILE", "Icons/TiledMenus/Garage.png", 0, menu_log_in);
+        menu_set_tile(5, "ABOUT", "Icons/TiledMenus/TeamCredits.png", 0, menu_about);
+        menu_set_tile(6, "LEAVE INFINITY", "Icons/TiledMenus/Difficulty.png", 0, menu_confirm_leave);
+    } else if (state == 1) {
+        menu_set_tile(0, "PROFILE", "PauseMenuTileBackgrounds/StartingGrid.png", 1, menu_profile);
+        menu_set_tile(1, "JOIN AND RESTART", "PauseMenuTileBackgrounds/OnlineRoadtrip.png", 1, menu_join);
+        menu_set_tile(2, "TEST CONNECTION", "PauseMenuTileBackgrounds/OnlineFreeroam.png", 1, menu_test_connection);
+        menu_set_tile(3, "SWITCH PROFILE", "Icons/TiledMenus/Garage.png", 0, menu_log_in);
+        menu_set_tile(4, "ABOUT", "Icons/TiledMenus/Options.png", 0, menu_about);
+    } else {
+        menu_set_tile(0, "PROFILE", "PauseMenuTileBackgrounds/StartingGrid.png", 1, menu_profile);
+        menu_set_tile(1, "CREATE PROFILE", "PauseMenuTileBackgrounds/MyRivals.png", 1, menu_ask_name);
+        menu_set_tile(2, "SIGN IN", "PauseMenuTileBackgrounds/OnlineRoadtrip.png", 1, menu_log_in);
+        menu_set_tile(3, "TEST CONNECTION", "Icons/TiledMenus/Options.png", 0, menu_test_connection);
+        menu_set_tile(4, "ABOUT", "Icons/TiledMenus/TeamCredits.png", 0, menu_about);
+    }
+    return menu_tiles;
+}
+
+static void menu_tile(int i, void *page) {
+    menu_page = page;
+    if (menu_tile_actions[i]) {
+        menu_tile_actions[i]();
+    }
+}
+static void menu_tile_0(void *page) { menu_tile(0, page); }
+static void menu_tile_1(void *page) { menu_tile(1, page); }
+static void menu_tile_2(void *page) { menu_tile(2, page); }
+static void menu_tile_3(void *page) { menu_tile(3, page); }
+static void menu_tile_4(void *page) { menu_tile(4, page); }
+static void menu_tile_5(void *page) { menu_tile(5, page); }
+static void menu_tile_6(void *page) { menu_tile(6, page); }
+static MenuPageFn const menu_tile_handlers[7] = {menu_tile_0, menu_tile_1, menu_tile_2, menu_tile_3,
+                                                  menu_tile_4, menu_tile_5, menu_tile_6};
+
+/* The popup version of the menu: used when the INFINITY screen cannot be opened. */
 static void menu_click(void *page) {
     menu_page = page;
     switch (azimuth_account_state()) {
     case 0: {
-        static const MenuButton buttons[3] = {{L"Criar perfil", menu_ask_name},
-                                              {L"Entrar com perfil", menu_log_in},
-                                              {L"Testar conexão", menu_test_connection}};
+        static const MenuButton buttons[3] = {{L"Create profile", menu_ask_name},
+                                              {L"Sign in", menu_log_in},
+                                              {L"Test connection", menu_test_connection}};
         line_start();
         if (azimuth_account_notice()[0]) {
             line_add(azimuth_account_notice());
             line_add(L"\n\n");
         }
-        line_add(L"ForzaInfinity: corridas de fantasma entre amigos.\n\nServidor: ");
+        line_add(L"ForzaInfinity: ghost races between friends.\n\nServer: ");
         line_add(azimuth_account_server());
-        line_add(L"\nUm perfil novo terá o formato Nome#");
+        line_add(L"\nA new profile will read Name#");
         line_add(azimuth_account_discriminator());
-        line_add(L". Já tem um perfil? Entre com o nome e a chave do site e continue do save guardado no "
-                 L"servidor.\n\nSeu progresso offline continua salvo.");
+        line_add(L". Already have a profile? Sign in with your profile and site key and continue from the save "
+                 L"kept on the server.\n\nYour offline progress stays saved.");
         menu_popup(L"INFINITY", menu_line, buttons, 3);
         break;
     }
     case 1: {
-        static const MenuButton buttons[2] = {{L"Entrar e reiniciar", menu_join},
-                                              {L"Testar conexão", menu_test_connection}};
+        static const MenuButton buttons[2] = {{L"Join and restart", menu_join},
+                                              {L"Test connection", menu_test_connection}};
         line_start();
-        line_add(L"Você tem o perfil online ");
+        line_add(L"You have the online profile ");
         line_add(azimuth_account_gamertag());
-        line_add(L" neste servidor.\n\nEntrar nele reinicia o jogo no perfil online. Seu progresso offline "
-                 L"continua salvo.");
+        line_add(L" on this server.\n\nJoining restarts the game on the online profile. Your offline progress "
+                 L"stays saved.");
         menu_popup(L"INFINITY", menu_line, buttons, 2);
         break;
     }
     case 2: {
-        static const MenuButton buttons[3] = {{L"Adicionar amigo", menu_add_friend},
-                                              {L"Testar conexão", menu_test_connection},
-                                              {L"Mais opções", menu_more}};
+        static const MenuButton buttons[3] = {{L"Add friend", menu_add_friend},
+                                              {L"Test connection", menu_test_connection},
+                                              {L"More options", menu_more}};
         line_start();
-        line_add(L"Perfil online: ");
+        line_add(L"Online profile: ");
         line_add(azimuth_account_gamertag());
-        line_add(L"\nServidor: ");
+        line_add(L"\nServer: ");
         line_add(azimuth_account_server());
-        line_add(L"\nChave do site: ");
-        line_add(azimuth_account_web_key()[0] ? azimuth_account_web_key() : L"(gere uma nova)");
+        line_add(L"\nSite key: ");
+        line_add(azimuth_account_web_key()[0] ? azimuth_account_web_key() : L"(make a new one)");
         menu_popup(L"INFINITY", menu_line, buttons, 3);
         break;
     }
     default:
         menu_info(L"INFINITY",
-                  L"O Infinity precisa de [Network] Mode=Proxy e de um servidor em FH2_ExtraOptions.ini.");
+                  L"Infinity needs [Network] Mode=Proxy and a server in FH2_ExtraOptions.ini.");
     }
 }
 
 /* ------------------------------------------------------------- install */
 
-/* After the game binds its own tiles, PART_Button_Infinity (azimuth_ui.c) opens our menu. The
-   handler is a member-function pointer pair {function, this adjustment}. */
+/* A named element of a page, as FUN_140dc6980 looks one up: a name object built by
+   FUN_141663220 (reference count at +0x10), FUN_140cbdc40(&name, page), FUN_1416650a0. */
+#define MENU_NAME_MAKE_RVA 0x1663220u
+#define MENU_NAME_FREE_RVA 0x16650a0u
+#define MENU_FIND_ELEMENT_RVA 0xcbdc40u
+#define MENU_FOCUS_SLOT_RVA (0x2e154b8u + 0x498u)
+#define MENU_FOCUS_RVA 0xdc6980u
+
+typedef void (*MenuNameMakeFn)(void *, const char *, int);
+typedef void (*MenuNameFreeFn)(void *);
+typedef void *(*MenuFindElementFn)(void **, void *);
+typedef void (*MenuFocusFn)(void *);
+
+static void *menu_find_element(void *page, const char *name) {
+    unsigned char key[96] __attribute__((aligned(16))) = {0}; /* the game keeps it in 0x58 bytes */
+    void *reference = key;
+    ((MenuNameMakeFn)(uintptr_t)(menu_game + MENU_NAME_MAKE_RVA))(key, name, -1);
+    InterlockedIncrement((volatile LONG *)(key + 0x10));
+    void *element = ((MenuFindElementFn)(uintptr_t)(menu_game + MENU_FIND_ELEMENT_RVA))(&reference, page);
+    ((MenuNameFreeFn)(uintptr_t)(menu_game + MENU_NAME_FREE_RVA))(key);
+    return element;
+}
+
+/* The page's first focus (vtable +0x498, FUN_140dc6980) goes to PART_Button_Assists without
+   checking it exists: on the INFINITY screen (whose Assists is a collapsed stand-in) it is
+   PART_Button_I0. */
+static void menu_default_focus(void *page) {
+    unsigned char *element = menu_find_element(page, "PART_Button_I0");
+    if (!element) {
+        element = menu_find_element(page, "PART_Button_Assists");
+    }
+    if (element) {
+        void *focusable = element + 0xb8;
+        ((MenuFocusFn)(*(void ***)focusable)[3])(focusable);
+    }
+}
+
+/* Settings' INFINITY tile opens the INFINITY screen (or the popup menu without it). */
+static int menu_infinity_screen_off;
+
+static void menu_infinity_click(void *page) {
+    menu_page = page;
+    if (menu_infinity_screen_off || azimuth_account_state() < 0 || !azimuth_ui_open_infinity(page)) {
+        menu_click(page);
+    }
+}
+
+/* After the game binds its own tiles, ours: PART_Button_Infinity on Settings and
+   PART_Button_I0..I6 on the INFINITY screen (the same page class; a page has only its own
+   buttons, binding a missing name does nothing). A handler is a member-function pointer pair
+   {function, this adjustment}. */
 static void menu_init(void *page) {
-    static void *const handler[2] = {(void *)(uintptr_t)menu_click, 0};
+    static void *handlers[8][2];
+    static const char *const names[8] = {"PART_Button_Infinity", "PART_Button_I0", "PART_Button_I1",
+                                         "PART_Button_I2",       "PART_Button_I3", "PART_Button_I4",
+                                         "PART_Button_I5",       "PART_Button_I6"};
+    MenuBindButtonFn bind = (MenuBindButtonFn)(uintptr_t)(menu_game + MENU_BIND_BUTTON_RVA);
     menu_init_original(page);
-    ((MenuBindButtonFn)(uintptr_t)(menu_game + MENU_BIND_BUTTON_RVA))(page, "PART_Button_Infinity", handler);
+    for (int i = 0; i < 8; ++i) {
+        handlers[i][0] = (void *)(uintptr_t)(i ? menu_tile_handlers[i - 1] : menu_infinity_click);
+        bind(page, names[i], (void *const *)handlers[i]);
+    }
 }
 
 void azimuth_apply_online_menu(unsigned char *game_image) {
@@ -571,5 +744,16 @@ void azimuth_apply_online_menu(unsigned char *game_image) {
     menu_page_keyboard_original = (MenuPageArgFn)(uintptr_t)keyboard_value;
     *keyboard_slot = (void *)(uintptr_t)menu_page_keyboard;
     VirtualProtect(keyboard_slot, sizeof(*keyboard_slot), old_protection, &ignored);
-    log_append("MENU: INFINITY menu bound in Configurações.\r\n");
+    /* first focus: also on the INFINITY screen */
+    void **focus_slot = (void **)(game_image + MENU_FOCUS_SLOT_RVA);
+    void *focus_value = 0;
+    if (memory_read(focus_slot, &focus_value, sizeof(focus_value)) && focus_value == game_image + MENU_FOCUS_RVA &&
+        VirtualProtect(focus_slot, sizeof(*focus_slot), PAGE_READWRITE, &old_protection)) {
+        *focus_slot = (void *)(uintptr_t)menu_default_focus;
+        VirtualProtect(focus_slot, sizeof(*focus_slot), old_protection, &ignored);
+    } else {
+        log_append("MENU: page focus slot not as expected; the INFINITY screen stays off.\r\n");
+        menu_infinity_screen_off = 1;
+    }
+    log_append("MENU: INFINITY menu bound in Settings.\r\n");
 }

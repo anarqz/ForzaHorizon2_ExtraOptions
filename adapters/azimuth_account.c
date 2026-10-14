@@ -1,6 +1,6 @@
 /* FH2Online account: "name#12345" on the configured server.
 
-   The player creates it from the game (Configurações > Infinity, azimuth_online_menu.c):
+   The player creates it from the game (Settings > Infinity, azimuth_online_menu.c):
    the 5 digits come from a fingerprint of this PC (SHA-256 of the Windows MachineGuid and the
    serial of the volume holding the mod). Only those 5 digits and a per-server device id
    (SHA-256 of the fingerprint + "host:port", so servers cannot match players up) leave the
@@ -18,7 +18,7 @@
    getters wait for it (at most 30 s), so the game never caches the old identity nor opens the
    save before it is synced. Joining or leaving the online profile restarts the game.
 
-   Another PC: Configurações > Infinity > "Entrar com perfil" takes Name#12345 and the
+   Another PC: Settings > Infinity > "Sign in" takes Name#12345 and the
    site key; the server issues a new token and the PC that had the profile is logged out (its
    next start finds the token refused, forgets it and says so in the menu). */
 #include "azimuth_host.h"
@@ -129,11 +129,12 @@ static int json_string(const char *json, const char *key, char *out, size_t cap)
         }
         size_t n = 0;
         for (++p; *p && *p != '"'; ++p) {
-            if (*p == '\\' && p[1]) {
-                ++p;
+            char c = *p;
+            if (c == '\\' && p[1]) {
+                c = *++p == 'n' ? '\n' : *p;
             }
             if (n + 1 < cap) {
-                out[n++] = *p;
+                out[n++] = c;
             }
         }
         out[n] = 0;
@@ -363,10 +364,10 @@ static void account_error(DWORD status, const char *reply, wchar_t *message, siz
     if (status && json_string(reply, "error", text, sizeof(text)) && text[0]) {
         utf8_to_wide(text, message, cap);
     } else if (!status) {
-        utf8_to_wide("Não foi possível falar com o servidor. Verifique o endereço e se ele está no ar.",
+        utf8_to_wide("Could not reach the server. Check its address and that it is running.",
                      message, cap);
     } else {
-        utf8_to_wide("O servidor recusou o pedido.", message, cap);
+        utf8_to_wide("The server refused the request.", message, cap);
     }
 }
 
@@ -380,13 +381,13 @@ static DWORD WINAPI account_thread(void *unused) {
         azimuth_cloud_start(account_directory, account_xuid, account_token, account_file, account_server);
     } else if (status == 401) {
         /* the profile logged in on another PC (or the server forgot it): this token is dead */
-        utf8_to_wide("O perfil ", account_notice, ARRAY_COUNT(account_notice));
+        utf8_to_wide("The profile ", account_notice, ARRAY_COUNT(account_notice));
         size_t n = wide_len(account_notice), g = wide_len(account_gamertag);
         if (n + g + 1 < ARRAY_COUNT(account_notice)) {
             memory_copy(account_notice + n, account_gamertag, (g + 1) * sizeof(wchar_t));
         }
         n = wide_len(account_notice);
-        utf8_to_wide(" foi conectado em outro PC. Para jogar com ele aqui, entre de novo com o nome e a chave do site.",
+        utf8_to_wide(" was signed in on another PC. To play it here, sign in again with the profile and its site key.",
                      account_notice + n, ARRAY_COUNT(account_notice) - n);
         account_token[0] = 0;
         account_write(L"Token", L"");
@@ -441,7 +442,7 @@ int azimuth_account_register(const wchar_t *name, wchar_t *message, size_t cap) 
     static char reply[2048], body[256];
     char ascii[16];
     if (!account_available || !azimuth_account_valid_name(name)) {
-        utf8_to_wide("O nome deve ter de 1 a 9 letras ou números e começar com uma letra.", message, cap);
+        utf8_to_wide("The name must have 1 to 9 letters or digits and start with a letter.", message, cap);
         return 0;
     }
     wide_to_ascii(name, ascii, sizeof(ascii));
@@ -477,18 +478,18 @@ int azimuth_account_log_in(const wchar_t *gamertag, const wchar_t *web_key, wcha
     /* Name#12345 and K7QM-4XPA-9RT2: letters, digits, '#' and '-' only (no JSON escaping) */
     for (const char *p = tag; *p; ++p) {
         if (!((*p >= 'A' && *p <= 'Z') || (*p >= 'a' && *p <= 'z') || (*p >= '0' && *p <= '9') || *p == '#')) {
-            utf8_to_wide("Use o formato Nome#12345.", message, cap);
+            utf8_to_wide("Use the format Name#12345.", message, cap);
             return 0;
         }
     }
     for (const char *p = key; *p; ++p) {
         if (!((*p >= 'A' && *p <= 'Z') || (*p >= 'a' && *p <= 'z') || (*p >= '0' && *p <= '9') || *p == '-')) {
-            utf8_to_wide("A chave do site tem letras, números e traços, como K7QM-4XPA-9RT2.", message, cap);
+            utf8_to_wide("A site key has letters, digits and dashes, like K7QM-4XPA-9RT2.", message, cap);
             return 0;
         }
     }
     if (!account_available) {
-        utf8_to_wide("O Infinity não está disponível neste PC.", message, cap);
+        utf8_to_wide("Infinity is not available on this PC.", message, cap);
         return 0;
     }
     body[0] = 0;
@@ -537,43 +538,43 @@ static void report_number(wchar_t *out, size_t cap, unsigned long long value) {
     report_add(out, cap, text);
 }
 
-/* Configurações > Infinity > Testar conexão: is the server up, how fast, and does it still
+/* Settings > Infinity > Testar conexão: is the server up, how fast, and does it still
    accept this PC's profile. */
 void azimuth_account_test(wchar_t *out, size_t cap) {
     static char reply[1024], text[400];
     static wchar_t wide[400];
     out[0] = 0;
-    report_add(out, cap, L"Servidor: ");
+    report_add(out, cap, L"Server: ");
     report_add(out, cap, azimuth_account_server());
     unsigned long long start = GetTickCount64();
     DWORD status = azimuth_net_call(L"GET", L"/fh2online/v1/info", 0, 0, reply, sizeof(reply));
     unsigned long long took = GetTickCount64() - start;
     if (status != 200) {
-        report_add(out, cap, status ? L"\nO servidor respondeu com erro (HTTP " : L"\nSem resposta do servidor.");
+        report_add(out, cap, status ? L"\nThe server answered with an error (HTTP " : L"\nNo answer from the server.");
         if (status) {
             report_number(out, cap, status);
             report_add(out, cap, L").");
         }
-        report_add(out, cap, L"\n\nConfira o endereço em FH2_ExtraOptions.ini ([Network] Server), se o servidor está "
-                             L"no ar e se o firewall do PC dele libera a porta.");
+        report_add(out, cap, L"\n\nCheck the address in FH2_ExtraOptions.ini ([Network] Server), that the server is "
+                             L"running and that its PC's firewall allows the port.");
         return;
     }
-    report_add(out, cap, L"\nConectado: resposta em ");
+    report_add(out, cap, L"\nConnected: answered in ");
     report_number(out, cap, took);
     report_add(out, cap, L" ms.");
     if (!account_token[0]) {
-        report_add(out, cap, L"\nPerfil: nenhum neste servidor ainda.");
+        report_add(out, cap, L"\nProfile: none on this server yet.");
         return;
     }
     status = azimuth_net_call(L"GET", L"/fh2online/v1/me", account_token_header(), 0, reply, sizeof(reply));
     if (status == 200) {
-        report_add(out, cap, L"\nPerfil ");
+        report_add(out, cap, L"\nProfile ");
         report_add(out, cap, account_gamertag);
-        report_add(out, cap, account_active ? L": aceito, jogando online." : L": aceito (reinicie para jogar online).");
+        report_add(out, cap, account_active ? L": accepted, playing online." : L": accepted (restart to play online).");
     } else {
         json_string(reply, "error", text, sizeof(text));
-        utf8_to_wide(text[0] ? text : "recusado.", wide, ARRAY_COUNT(wide));
-        report_add(out, cap, L"\nPerfil: ");
+        utf8_to_wide(text[0] ? text : "refused.", wide, ARRAY_COUNT(wide));
+        report_add(out, cap, L"\nProfile: ");
         report_add(out, cap, wide);
     }
 }
@@ -600,18 +601,18 @@ int azimuth_account_banner(char *out, size_t cap, const char **color) {
     LONG link = account_link;
     if (account_active && link != 2) {
         wide_to_ascii(account_gamertag, tag, sizeof(tag));
-        text_add(out, cap, "INFINITY  |  CONECTADO  |  ");
+        text_add(out, cap, "INFINITY  |  CONNECTED  |  ");
         text_add(out, cap, tag);
         *color = "#3ddc84";
     } else if (link == 2) {
-        text_add(out, cap, "INFINITY  |  SEM CONEXÃO COM O SERVIDOR");
+        text_add(out, cap, "INFINITY  |  NO CONNECTION TO THE SERVER");
         *color = "#ff4f4f";
     } else if (account_token[0]) {
-        text_add(out, cap, "INFINITY  |  PERFIL ONLINE DESATIVADO");
+        text_add(out, cap, "INFINITY  |  ONLINE PROFILE OFF");
         *color = "#9a9a9a";
     } else {
-        text_add(out, cap, link == 1 ? "INFINITY  |  SERVIDOR ONLINE  |  CRIE SEU PERFIL EM CONFIGURAÇÕES"
-                                     : "INFINITY  |  VERIFICANDO O SERVIDOR...");
+        text_add(out, cap, link == 1 ? "INFINITY  |  SERVER ONLINE  |  CREATE YOUR PROFILE IN SETTINGS"
+                                     : "INFINITY  |  CHECKING THE SERVER...");
         *color = link == 1 ? "#f5c400" : "#9a9a9a";
     }
     return 1;
@@ -643,7 +644,7 @@ int azimuth_account_add_friend(const wchar_t *gamertag, wchar_t *message, size_t
     /* Name#12345 only: letters, digits and one '#' (no JSON escaping needed) */
     for (const char *p = tag; *p; ++p) {
         if (!((*p >= 'A' && *p <= 'Z') || (*p >= 'a' && *p <= 'z') || (*p >= '0' && *p <= '9') || *p == '#')) {
-            utf8_to_wide("Use o formato Nome#12345.", message, cap);
+            utf8_to_wide("Use the format Name#12345.", message, cap);
             return 0;
         }
     }
@@ -727,7 +728,7 @@ void azimuth_apply_account(const wchar_t *directory) {
                              account_file);
     account_log("fingerprint #", account_discriminator);
     if (!account_token[0]) {
-        log_append("ACCOUNT: no account on this server yet (Configurações > Infinity creates one).\r\n");
+        log_append("ACCOUNT: no account on this server yet (Settings > Infinity creates one).\r\n");
         return;
     }
     if (account_online[0] != L'1') {

@@ -1,6 +1,6 @@
 /* Game pages edited in memory as the game reads them from media/UI.zip:
-   - Configurações (Scenes/Anthem/A_PauseOptions.xaml): its right column becomes two tiles,
-     CRÉDITOS (the game's own, now 1x1) on top and INFINITY (PART_Button_Infinity, bound to
+   - Settings (Scenes/Anthem/A_PauseOptions.xaml): its right column becomes two tiles,
+     CREDITS (the game's own, now 1x1) on top and INFINITY (PART_Button_Infinity, bound to
      the FH2Online menu by azimuth_online_menu.c) below;
    - the pause menu (Scenes/Anthem/A_PauseMenu.xaml): a line centered at the top says whether
      the Infinity server is connected (rebuilt every time the page is read).
@@ -104,7 +104,7 @@ static int ui_copy(UiText *out, const char **at, const char *until, size_t skip,
     "                                        local:UIPageTransitionManager.TransitionIndex=\"6\"\r\n"        \
     "                                        local:BindingProxy.C=\"DisableMotionBlur\"/>"
 
-/* Configurações: credits 1x1 on top, INFINITY below. 0 when the text is not the one we know. */
+/* Settings: credits 1x1 on top, INFINITY below. 0 when the text is not the one we know. */
 static int ui_edit_options(const char *page, unsigned length, UiText *out) {
     const char *item = ui_find(page, length, "x:Key=\"A_MenuDataItem_TeamCredits\"", 0);
     const char *item_end = item ? ui_find(page, length, "/>", (unsigned)(item - page)) : 0;
@@ -148,6 +148,253 @@ static int ui_edit_pause(const char *page, unsigned length, const char *text, co
            ui_copy(out, &at, page + length, 0, 0);
 }
 
+/* --------------------------------------------------------- INFINITY page */
+
+/* The INFINITY screen is the Settings page class shown again by a new flow exit
+   ("infinity", added below), with its tiles replaced: same grid, same styles. Each slot is
+   {style, template, grid x, grid y, x coordinate, y coordinate}. */
+static const char *const ui_slots[7][6] = {
+    {"1x2", "VerticalImageTile", "0", "0", "X_0", "Y_0"},   {"2x1", "HorizontalImageTile", "1", "0", "X_1", "Y_0"},
+    {"2x1", "HorizontalImageTile", "1", "1", "X_1", "Y_1"}, {"1x1", "IconTile", "3", "0", "X_3", "Y_0"},
+    {"1x1", "IconTile", "3", "1", "X_3", "Y_1"},             {"1x1", "IconTile", "4", "0", "X_4", "Y_0"},
+    {"1x1", "IconTile", "4", "1", "X_4", "Y_1"}};
+
+static char ui_infinity_buffer[UI_OPTIONS_MAX];
+static UiText ui_infinity = {ui_infinity_buffer, 0, UI_OPTIONS_MAX};
+static volatile LONG ui_infinity_pending;
+
+static int ui_add(UiText *out, const char *text) {
+    return ui_append(out, text, text_length(text));
+}
+
+/* Settings with the INFINITY title and tiles (from azimuth_infinity_tiles). */
+static int ui_edit_infinity(const char *page, unsigned length, UiText *out) {
+    const InfinityTile *tiles = azimuth_infinity_tiles();
+    const char *title = ui_find(page, length, "Content=\"{local:Loc ScreenTitles.IDS_MyProfile}\"", 0);
+    const char *item = ui_find(page, length, "x:Key=\"A_MenuDataItem_TeamCredits\"", 0);
+    const char *item_end = item ? ui_find(page, length, "/>", (unsigned)(item - page)) : 0;
+    const char *canvas = ui_find(page, length, "<local:AutoSizeCanvas x:Name=\"PART_SCOPE_Home\">", 0);
+    const char *canvas_end = canvas ? ui_find(page, length, "</local:AutoSizeCanvas>", (unsigned)(canvas - page)) : 0;
+    /* resources (the data items), then the title, then the tiles */
+    if (!tiles || !title || !item_end || !canvas_end || item_end > title || title > canvas) {
+        return 0;
+    }
+    const char *at = page;
+    char number[2] = {0, 0};
+    out->length = 0;
+    if (!ui_copy(out, &at, item_end + 2, 0, 0)) {
+        return 0;
+    }
+    for (int i = 0; i < 7; ++i) {
+        if (!tiles[i].heading) {
+            continue;
+        }
+        number[0] = (char)('0' + i);
+        if (!ui_add(out, "\r\n            <local:TileMenuDataItem x:Key=\"A_MenuDataItem_I") || !ui_add(out, number) ||
+            !ui_add(out, "\" Heading=\"") || !ui_add(out, tiles[i].heading) ||
+            !ui_add(out, "\" Icon=\"/ForzaUI;component/Textures/Anthem/") || !ui_add(out, tiles[i].icon) ||
+            !ui_add(out, tiles[i].photo ? "\" UseAlternateColors=\"True\" />" : "\" />")) {
+            return 0;
+        }
+    }
+    /* the page class looks PART_Button_Assists up when it opens (and dereferences it): a
+       collapsed one stays for it */
+    if (!ui_copy(out, &at, title, text_length("Content=\"{local:Loc ScreenTitles.IDS_MyProfile}\""),
+                 "Content=\"INFINITY\"") ||
+        !ui_copy(out, &at, canvas + text_length("<local:AutoSizeCanvas x:Name=\"PART_SCOPE_Home\">"), 0,
+                 /* a complete tile (the navigation manager reads every tile's grid
+                    properties), disabled, collapsed and outside the used grid */
+                 "\r\n                                <Button x:Name=\"PART_Button_Assists\"\r\n"
+                 "                                        local:TileMenuNavigationManager.TileState=\"Disabled\"\r\n"
+                 "                                        Visibility=\"Collapsed\"\r\n"
+                 "                                        DataContext=\"{StaticResource A_MenuDataItem_Assists}\"\r\n"
+                 "                                        local:TileMenuNavigationManager.GridX=\"6\"\r\n"
+                 "                                        local:TileMenuNavigationManager.GridY=\"0\"\r\n"
+                 "                                        Style=\"{DynamicResource A_Style_Button_Tile_1x1}\"\r\n"
+                 "                                        Canvas.Left=\"{StaticResource A_Double_TileCoord_X_4}\"\r\n"
+                 "                                        Canvas.Top=\"{StaticResource A_Double_TileCoord_Y_0}\"\r\n"
+                 "                                        Template=\"{StaticResource A_ControlTemplate_IconTile}\"\r\n"
+                 "                                        local:UIPageTransitionManager.TransitionIndex=\"7\"\r\n"
+                 "                                        local:BindingProxy.C=\"DisableMotionBlur\"/>")) {
+        return 0;
+    }
+    for (int i = 0; i < 7; ++i) {
+        const char *const *slot = ui_slots[i];
+        if (!tiles[i].heading) {
+            continue;
+        }
+        number[0] = (char)('0' + i);
+        if (!ui_add(out, "\r\n                                <Button x:Name=\"PART_Button_I") || !ui_add(out, number) ||
+            !ui_add(out, "\"\r\n                                        local:TileMenuNavigationManager.TileState=\"Enabled\""
+                         "\r\n                                        DataContext=\"{StaticResource A_MenuDataItem_I") ||
+            !ui_add(out, number) ||
+            !ui_add(out, "}\"\r\n                                        local:TileMenuNavigationManager.GridX=\"") ||
+            !ui_add(out, slot[2]) ||
+            !ui_add(out, "\"\r\n                                        local:TileMenuNavigationManager.GridY=\"") ||
+            !ui_add(out, slot[3]) ||
+            !ui_add(out, "\"\r\n                                        Style=\"{DynamicResource A_Style_Button_Tile_") ||
+            !ui_add(out, slot[0]) ||
+            !ui_add(out, "}\"\r\n                                        Canvas.Left=\"{StaticResource A_Double_TileCoord_") ||
+            !ui_add(out, slot[4]) ||
+            !ui_add(out, "}\"\r\n                                        Canvas.Top=\"{StaticResource A_Double_TileCoord_") ||
+            !ui_add(out, slot[5]) ||
+            !ui_add(out, "}\"\r\n                                        Template=\"{StaticResource A_ControlTemplate_") ||
+            !ui_add(out, slot[1]) ||
+            !ui_add(out, "}\"\r\n                                        local:UIPageTransitionManager.TransitionIndex=\"") ||
+            !ui_add(out, number) ||
+            !ui_add(out, "\"\r\n                                        local:BindingProxy.C=\"DisableMotionBlur\"/>")) {
+            return 0;
+        }
+    }
+    /* the page's own tiles are left out */
+    at = canvas_end;
+    return ui_add(out, "\r\n                            ") && ui_copy(out, &at, page + length, 0, 0);
+}
+
+/* ------------------------------------------------------------ flow edits */
+
+#define UI_SCREENS_SIZE 101115u
+#define UI_PAUSE_FLOW_SIZE 55717u
+#define UI_FLOW_MAX (UI_SCREENS_SIZE + 2048u)
+
+static char ui_screens_buffer[UI_FLOW_MAX], ui_pause_flow_buffer[UI_FLOW_MAX];
+static UiText ui_screens = {ui_screens_buffer, 0, UI_FLOW_MAX};
+static UiText ui_pause_flow = {ui_pause_flow_buffer, 0, UI_FLOW_MAX};
+static int ui_screens_failed, ui_pause_flow_failed;
+
+/* Replaces each anchor (unique in the source, in order) by its replacement. */
+static int ui_replace_anchors(const char *source, unsigned length, const char *const *pairs, unsigned count,
+                              UiText *out) {
+    const char *at = source;
+    out->length = 0;
+    for (unsigned i = 0; i < count; ++i) {
+        const char *anchor = ui_find(source, length, pairs[2 * i], 0);
+        if (!anchor || anchor < at ||
+            ui_find(source, length, pairs[2 * i], (unsigned)(anchor - source) + 1)) {
+            return 0;
+        }
+        if (!ui_copy(out, &at, anchor, text_length(pairs[2 * i]), pairs[2 * i + 1])) {
+            return 0;
+        }
+    }
+    return ui_copy(out, &at, source + length, 0, 0);
+}
+
+/* ui_screens.xml: a show_infinity state shows the Settings page class again. It keeps every
+   exit of Settings: should the INFINITY page fail to build, the plain page shown there still
+   works. (A page only takes the exits its class registers, so INFINITY has none of its own.) */
+#define UI_MENU_FLOW_COMMENT "<!--Pause Menu flow-->"
+static const char *const ui_screens_edits[] = {
+    UI_MENU_FLOW_COMMENT,
+    UI_MENU_FLOW_COMMENT
+    "\r\n  <state id=\"show_infinity\">\r\n    <entry id=\"enter\" target=\".\" />\r\n"
+    "    <entry id=\"enterback\" target=\".\" />\r\n    <exit id=\"back\" />\r\n"
+    "    <exit id=\"assists\" />\r\n    <exit id=\"controls\" />\r\n    <exit id=\"hud\" />\r\n"
+    "    <exit id=\"video\" />\r\n    <exit id=\"audio\" />\r\n    <exit id=\"team_credits\" />\r\n"
+    "    <behavior id=\"UIPagePauseOptionsMenu\" isBack=\"{IsEntry enterback}\">\r\n"
+    "      <transition id=\"assists\" target=\".assists\" />\r\n      <transition id=\"controls\" target=\".controls\" />\r\n"
+    "      <transition id=\"audio\" target=\".audio\" />\r\n      <transition id=\"video\" target=\".video\" />\r\n"
+    "      <transition id=\"hud\" target=\".hud\" />\r\n      <transition id=\"team_credits\" target=\".team_credits\" />\r\n"
+    "      <transition id=\"back\" target=\".back\" />\r\n    </behavior>\r\n"
+    "    <behavior id=\"OnParentTransition\">\r\n      <transition id=\"ParentTransition\" target=\".back\" />\r\n"
+    "    </behavior>\r\n  </state>\r\n"};
+
+/* pause.xml: the INFINITY tile takes Settings' team_credits exit (a registered one) with the
+   Fh2InfinityOpen sticky answered true (ui_sticky_enter), so team_credits goes either to the
+   credits or to INFINITY. Both ways pass through the spinner scene (a page of its own): going
+   between two states of the same page class the game keeps the page it has, and the page must
+   be read again to switch between Settings and INFINITY. */
+#define UI_INFINITY_STICKY "Fh2InfinityOpen"
+static const char *const ui_pause_flow_edits[] = {
+    /* the sticky check with its name written in (global.check_bool_sticky takes it as a
+       parameter, which ui_sticky_enter does not read) */
+    "<state id=\"my_profile_flow\">",
+    "<state id=\"fh2_infinity_or_credits\">\r\n    <entry target=\".\" />\r\n"
+    "    <exit id=\"true\" />\r\n    <exit id=\"false\" />\r\n    <exit id=\"unset\" />\r\n"
+    "    <behavior id=\"BoolSwitchSticky\" name=\"" UI_INFINITY_STICKY "\">\r\n"
+    "      <transition id=\"true\" target=\".true\" />\r\n      <transition id=\"false\" target=\".false\" />\r\n"
+    "      <transition id=\"unset\" target=\".unset\" />\r\n    </behavior>\r\n  </state>\r\n\r\n"
+    "  <state id=\"my_profile_flow\">",    "<exit id=\"team_credits\" target=\"team_credits\" />",
+    "<exit id=\"team_credits\" target=\"credits_or_infinity\" />",
+    "<node id=\"team_credits\" state=\"ui_screens.show_team_credits\">\r\n"
+    "      <exit id=\"back\" target=\"my_profile.enterback\" />\r\n    </node>",
+    "<node id=\"team_credits\" state=\"ui_screens.show_team_credits\">\r\n"
+    "      <exit id=\"back\" target=\"my_profile.enterback\" />\r\n    </node>\r\n"
+    "\r\n    <node id=\"credits_or_infinity\" state=\"fh2_infinity_or_credits\">\r\n"
+    "      <exit id=\"true\" target=\"infinity_in\" />\r\n      <exit id=\"false\" target=\"team_credits\" />\r\n"
+    "      <exit id=\"unset\" target=\"team_credits\" />\r\n    </node>\r\n"
+    "\r\n    <node id=\"infinity_in\" state=\"ui_screens.show_empty_scene_with_spinner_and_continue\">\r\n"
+    "      <exit target=\"infinity.enter\" />\r\n    </node>\r\n"
+    "\r\n    <node id=\"infinity_out\" state=\"ui_screens.show_empty_scene_with_spinner_and_continue\">\r\n"
+    "      <exit target=\"my_profile.enterback\" />\r\n    </node>\r\n"
+    "\r\n    <node id=\"infinity\" state=\"ui_screens.show_infinity\">\r\n"
+    "      <entry id=\"enter\" />\r\n"
+    "      <exit id=\"back\" target=\"infinity_out\" />\r\n"
+    "      <exit id=\"assists\" target=\"assists\" />\r\n      <exit id=\"controls\" target=\"control_options.enter\" />\r\n"
+    "      <exit id=\"hud\" target=\"hud_options\" />\r\n      <exit id=\"video\" target=\"video_options\" />\r\n"
+    "      <exit id=\"audio\" target=\"audio_options\" />\r\n      <exit id=\"team_credits\" target=\"team_credits\" />\r\n"
+    "    </node>"};
+
+/* The sticky check (States::BoolSwitchSticky, vtable +0x20 = FUN_140945990) picks the
+   transition at +0x80 (true), +0xb0 (false) or +0xe0 (unset) with FUN_141925260; its name is
+   a std::string at +0x60 when written literally in the flow. For Fh2InfinityOpen the answer is
+   whether the INFINITY tile asked for it (once). */
+#define UI_STICKY_SLOT_RVA (0x2d29a90u + 0x20u)
+#define UI_STICKY_ENTER_RVA 0x945990u
+#define UI_TAKE_TRANSITION_RVA 0x1925260u
+
+typedef void (*UiStickyEnterFn)(void *, void *, void *, void *);
+typedef void (*UiTakeTransitionFn)(void *, void *);
+
+static UiStickyEnterFn ui_sticky_enter_original;
+static volatile LONG ui_infinity_sticky, ui_sticky_bound_logged;
+
+static void ui_sticky_enter(void *self, void *a, void *b, void *c) {
+    unsigned char *state = self;
+    if (!*(void **)(state + 0x30)) {
+        unsigned char *name = state + 0x60; /* std::string: inline or pointer, size +0x10, capacity +0x18 */
+        size_t size = *(size_t *)(name + 0x10), capacity = *(size_t *)(name + 0x18);
+        const char *text = capacity > 15 ? *(const char **)name : (const char *)name;
+        if (size == sizeof(UI_INFINITY_STICKY) - 1 && text && memory_equal(text, UI_INFINITY_STICKY, size)) {
+            int open = InterlockedExchange(&ui_infinity_sticky, 0) != 0;
+            log_append(open ? "UI: Settings > INFINITY.\r\n" : "UI: Settings > credits.\r\n");
+            ((UiTakeTransitionFn)(uintptr_t)(ui_game + UI_TAKE_TRANSITION_RVA))(self, state + (open ? 0x80 : 0xb0));
+            return;
+        }
+    }
+    if (*(void **)(state + 0x30) && !InterlockedExchange(&ui_sticky_bound_logged, 1)) {
+        log_append("UI: a sticky check with a bound name (not ours).\r\n");
+    }
+    ui_sticky_enter_original(self, a, b, c);
+}
+
+/* Settings' INFINITY tile: the team_credits exit (the game's own std::string, object
+   0x14352f438 + 0x10), as the credits tile handler does (FUN_140dcc6c0: remember the focused
+   tile, then FUN_141422f10(page, &exit name) when the page has a flow at +0x310), with the
+   sticky armed so the flow goes to INFINITY. The next read of the page is the INFINITY
+   version. 0 when the page has no flow or the flow edits are not in place. */
+#define UI_TAKE_EXIT_RVA 0x1422f10u
+#define UI_REMEMBER_FOCUS_RVA 0x140e210u
+#define UI_FOCUS_SLOT_RVA 0x352f478u
+#define UI_CREDITS_EXIT_RVA 0x352f448u
+
+typedef void (*UiTakeExitFn)(void *, const void *);
+typedef void (*UiRememberFn)(void *, void *);
+
+int azimuth_ui_open_infinity(void *page) {
+    if (!ui_game || !ui_sticky_enter_original || !*(void **)((unsigned char *)page + 0x310) || ui_screens_failed ||
+        ui_pause_flow_failed || !ui_screens.length || !ui_pause_flow.length) {
+        return 0;
+    }
+    unsigned char focus[16];
+    ((UiRememberFn)(uintptr_t)(ui_game + UI_REMEMBER_FOCUS_RVA))(*(void **)((unsigned char *)page + 0x410), focus);
+    memory_copy(ui_game + UI_FOCUS_SLOT_RVA, focus, 12);
+    InterlockedExchange(&ui_infinity_pending, 1);
+    InterlockedExchange(&ui_infinity_sticky, 1);
+    ((UiTakeExitFn)(uintptr_t)(ui_game + UI_TAKE_EXIT_RVA))(page, ui_game + UI_CREDITS_EXIT_RVA);
+    log_append("UI: INFINITY clicked; flow exit taken.\r\n");
+    return 1;
+}
 /* ------------------------------------------------------------- the hook */
 
 /* Reads a stream of exactly `size` bytes into ui_source; 1 when it holds `marker`. */
@@ -181,9 +428,48 @@ static int ui_serve(void **out, void *stream, const UiText *text) {
     return 1;
 }
 
+/* A flow file edited once (the game reads them at start). */
+static void ui_replace_flow(void **out, void *stream, unsigned size, const char *marker, const char *const *edits,
+                            unsigned count, UiText *text, int *failed, const char *name) {
+    if (!ui_read(stream, size, marker)) {
+        ui_rewind(stream);
+        return;
+    }
+    if (!text->length && !ui_replace_anchors(ui_source, size, edits, count, text)) {
+        text->length = 0;
+        *failed = 1;
+        log_append("UI: ");
+        log_append(name);
+        log_append(" not as expected; no INFINITY screen.\r\n");
+    }
+    if (!text->length || !ui_serve(out, stream, text)) {
+        ui_rewind(stream);
+        return;
+    }
+    log_append("UI: ");
+    log_append(name);
+    log_append(" routes Settings > INFINITY.\r\n");
+}
+
 static void ui_replace(void **out, void *stream) {
     long long size = ((UiRemainingFn)ui_slot(stream, 0x50))(stream);
-    if (size == UI_OPTIONS_SIZE && !ui_options_failed) {
+    if (size == UI_SCREENS_SIZE && !ui_screens_failed) {
+        ui_replace_flow(out, stream, UI_SCREENS_SIZE, "<state id=\"show_my_profile\">", ui_screens_edits,
+                        ARRAY_COUNT(ui_screens_edits) / 2, &ui_screens, &ui_screens_failed, "ui_screens.xml");
+    } else if (size == UI_PAUSE_FLOW_SIZE && !ui_pause_flow_failed) {
+        ui_replace_flow(out, stream, UI_PAUSE_FLOW_SIZE, "<state id=\"my_profile_flow\">", ui_pause_flow_edits,
+                        ARRAY_COUNT(ui_pause_flow_edits) / 2, &ui_pause_flow, &ui_pause_flow_failed, "pause.xml");
+    } else if (size == UI_OPTIONS_SIZE && InterlockedExchange(&ui_infinity_pending, 0)) {
+        /* the INFINITY screen: built now, with the profile as it is now */
+        if (!ui_read(stream, UI_OPTIONS_SIZE, "x:Class=\"ForzaUI.A_PauseOptions\"") ||
+            !ui_edit_infinity(ui_source, UI_OPTIONS_SIZE, &ui_infinity) || !ui_serve(out, stream, &ui_infinity)) {
+            log_append("UI: INFINITY screen could not be built; showing Settings.\r\n");
+            ui_rewind(stream);
+            ui_replace(out, stream);
+        } else {
+            log_append("UI: INFINITY screen shown.\r\n");
+        }
+    } else if (size == UI_OPTIONS_SIZE && !ui_options_failed) {
         if (!ui_read(stream, UI_OPTIONS_SIZE, "x:Class=\"ForzaUI.A_PauseOptions\"")) {
             ui_rewind(stream);
             return;
@@ -191,12 +477,12 @@ static void ui_replace(void **out, void *stream) {
         if (!ui_options.length && !ui_edit_options(ui_source, UI_OPTIONS_SIZE, &ui_options)) {
             ui_options.length = 0;
             ui_options_failed = 1;
-            log_append("UI: A_PauseOptions.xaml not as expected; Configurações left as is.\r\n");
+            log_append("UI: A_PauseOptions.xaml not as expected; Settings left as is.\r\n");
         }
         if (!ui_options.length || !ui_serve(out, stream, &ui_options)) {
             ui_rewind(stream);
-        } else if (!InterlockedExchange(&ui_logged_options, 1)) {
-            log_append("UI: Configurações: CRÉDITOS + INFINITY tiles.\r\n");
+        } else if (InterlockedIncrement(&ui_logged_options) <= 20) {
+            log_append("UI: Settings page read (CREDITS + INFINITY tiles).\r\n");
         }
     } else if (size == UI_PAUSE_SIZE && !ui_pause_failed) {
         static char text[200];
@@ -270,5 +556,17 @@ void azimuth_apply_ui(unsigned char *game_image) {
     memory_copy(target, jump, sizeof(jump));
     FlushInstructionCache(GetCurrentProcess(), target, sizeof(jump));
     VirtualProtect(target, sizeof(jump), old_protection, &ignored);
-    log_append("UI: zip reader hooked for the Configurações and pause pages.\r\n");
+
+    /* the Fh2InfinityOpen sticky (Settings > INFINITY) */
+    void **sticky_slot = (void **)(game_image + UI_STICKY_SLOT_RVA);
+    void *sticky_value = 0;
+    if (memory_read(sticky_slot, &sticky_value, sizeof(sticky_value)) && sticky_value == game_image + UI_STICKY_ENTER_RVA &&
+        VirtualProtect(sticky_slot, sizeof(*sticky_slot), PAGE_READWRITE, &old_protection)) {
+        ui_sticky_enter_original = (UiStickyEnterFn)(uintptr_t)sticky_value;
+        *sticky_slot = (void *)(uintptr_t)ui_sticky_enter;
+        VirtualProtect(sticky_slot, sizeof(*sticky_slot), old_protection, &ignored);
+    } else {
+        log_append("UI: sticky check not as expected; INFINITY uses the popup menu.\r\n");
+    }
+    log_append("UI: zip reader hooked for the Settings and pause pages.\r\n");
 }

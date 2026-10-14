@@ -59,8 +59,19 @@ const wchar_t *azimuth_account_notice(void);
 void azimuth_account_test(wchar_t *out, size_t cap);
 int azimuth_account_banner(char *out, size_t cap, const char **color);
 
-/* azimuth_online_menu.c: Configurações > INFINITY. */
+/* azimuth_online_menu.c: Settings > INFINITY. */
 void azimuth_apply_online_menu(unsigned char *game_image);
-/* azimuth_ui.c: the CRÉDITOS + INFINITY tiles in Configurações. */
+/* One tile of the INFINITY screen: heading (UTF-8, NULL = no tile), image or icon under
+   Textures/Anthem/, photo = dark image tile with light text. */
+typedef struct {
+    const char *heading;
+    const char *icon;
+    int photo;
+} InfinityTile;
+/* The 7 tiles for the profile's current state (azimuth_online_menu.c). */
+const InfinityTile *azimuth_infinity_tiles(void);
+/* azimuth_ui.c: the CREDITS + INFINITY tiles in Settings, the INFINITY screen and the
+   pause menu's status line. */
 void azimuth_apply_ui(unsigned char *game_image);
+int azimuth_ui_open_infinity(void *page);
 #endif
