@@ -26,4 +26,14 @@ void azimuth_apply_save_compatibility(int disable_checksums);
 void azimuth_apply_network(const wchar_t *directory);
 void azimuth_apply_economy_probe(unsigned char *game_image);
 void azimuth_apply_pad(void);
+
+/* azimuth_net.c: the configured server, for the account module. */
+const wchar_t *azimuth_net_server_name(void);
+int azimuth_net_proxy_enabled(void);
+DWORD azimuth_net_call(const wchar_t *method, const wchar_t *path, const wchar_t *extra_header,
+                       const char *body, char *out, size_t capacity);
+
+/* azimuth_account.c: the player's FH2Online account on that server. */
+void azimuth_apply_account(const wchar_t *directory);
+const wchar_t *azimuth_account_token(void);
 #endif

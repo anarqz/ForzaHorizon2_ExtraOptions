@@ -84,7 +84,7 @@ static char *trim_whitespace(char *text) {
 
 static int known_section(const char *name) {
     if (text_equal_ignore_case(name, "General") ||
-        text_equal_ignore_case(name, "Network")) {
+        text_equal_ignore_case(name, "Network") || text_equal_ignore_case(name, "Account")) {
         return 1;
     }
     for (size_t index = 0; index < setting_count; ++index) {
@@ -205,6 +205,14 @@ static int parse_ini(char *text, ModOptions *options) {
                 continue;
             }
             if (text_equal_ignore_case(key, "Server") && *value) {
+                continue;
+            }
+            goto invalid;
+        }
+        /* FH2Online: [Account] Name is checked by adapters/azimuth_account.c (a bad name only
+           skips the account, it does not refuse the whole file). */
+        if (text_equal_ignore_case(section, "Account")) {
+            if (text_equal_ignore_case(key, "Name")) {
                 continue;
             }
             goto invalid;

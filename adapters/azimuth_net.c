@@ -57,6 +57,7 @@ enum { NET_MODE_OFF, NET_MODE_CAPTURE, NET_MODE_PROXY };
 static int net_mode;
 static wchar_t net_server_host[256];
 static INTERNET_PORT net_server_port = 8081;
+static int net_server_secure; /* https:// in [Network] Server */
 static wchar_t net_log_path[PATH_CAPACITY];
 static unsigned char *net_azimuth_base;
 static volatile LONG net_next_id;
@@ -765,6 +766,12 @@ static int net_forward(NetRequest *request, HRESULT *error) {
         !buffer_append_wide(&headers, id_wide) || !buffer_append_wide(&headers, L"\r\n")) {
         goto done;
     }
+    /* The FH2Online account of this server (only ever sent to the server it came from). */
+    const wchar_t *token = azimuth_account_token();
+    if (token && (!buffer_append_wide(&headers, L"X-Fh2-Token: ") ||
+                  !buffer_append_wide(&headers, token) || !buffer_append_wide(&headers, L"\r\n"))) {
+        goto done;
+    }
     session = http_open(L"FH2Online/1", WINHTTP_ACCESS_TYPE_NO_PROXY, WINHTTP_NO_PROXY_NAME,
                         WINHTTP_NO_PROXY_BYPASS, 0);
     if (!session) {
@@ -775,7 +782,8 @@ static int net_forward(NetRequest *request, HRESULT *error) {
     connection = http_connect(session, net_server_host, net_server_port, 0);
     http = connection ? http_open_request(connection, buffer_wide(&request->method),
                                           buffer_wide(&path), NULL, WINHTTP_NO_REFERER,
-                                          WINHTTP_DEFAULT_ACCEPT_TYPES, 0)
+                                          WINHTTP_DEFAULT_ACCEPT_TYPES,
+                                          net_server_secure ? WINHTTP_FLAG_SECURE : 0)
                       : 0;
     if (!http) {
         goto done;
@@ -865,6 +873,108 @@ done:
     buffer_free(&headers);
     buffer_free(&raw);
     return answered;
+}
+
+/* "host:port" of [Network] Server, for the account module (device id, token file). */
+const wchar_t *azimuth_net_server_name(void) {
+    static wchar_t name[300];
+    size_t length = wide_length(net_server_host);
+    if (!net_server_host[0] || length + 8 >= ARRAY_COUNT(name)) {
+        return 0;
+    }
+    memory_copy(name, net_server_host, length * sizeof(wchar_t));
+    name[length++] = L':';
+    unsigned port = net_server_port, digits = 0;
+    wchar_t reversed[6];
+    do {
+        reversed[digits++] = (wchar_t)(L'0' + port % 10);
+        port /= 10;
+    } while (port && digits < 6);
+    while (digits) {
+        name[length++] = reversed[--digits];
+    }
+    name[length] = 0;
+    return name;
+}
+
+int azimuth_net_proxy_enabled(void) {
+    return net_mode == NET_MODE_PROXY;
+}
+
+/* One synchronous request to the configured server (the FH2Online account endpoints), not
+   game traffic: no X-Fh2-Original-Url. `extra_header` is one "Name: value" line or NULL.
+   The reply body is copied to `out` (NUL-terminated, truncated to `capacity - 1`).
+   Returns the HTTP status, 0 when the server could not be reached. */
+DWORD azimuth_net_call(const wchar_t *method, const wchar_t *path, const wchar_t *extra_header,
+                       const char *body, char *out, size_t capacity) {
+    HINTERNET session = 0, connection = 0, http = 0;
+    DWORD status = 0, status_size = sizeof(status), size = 0;
+    size_t used = 0;
+    if (out && capacity) {
+        out[0] = 0;
+    }
+    if (!net_load_winhttp()) {
+        return 0;
+    }
+    session = http_open(L"FH2Online/1", WINHTTP_ACCESS_TYPE_NO_PROXY, WINHTTP_NO_PROXY_NAME,
+                        WINHTTP_NO_PROXY_BYPASS, 0);
+    if (!session) {
+        goto done;
+    }
+    http_set_timeouts(session, 5000, 5000, 10000, 10000);
+    connection = http_connect(session, net_server_host, net_server_port, 0);
+    http = connection ? http_open_request(connection, method, path, NULL, WINHTTP_NO_REFERER,
+                                          WINHTTP_DEFAULT_ACCEPT_TYPES,
+                                          net_server_secure ? WINHTTP_FLAG_SECURE : 0)
+                      : 0;
+    if (!http) {
+        goto done;
+    }
+    http_add_headers(http, L"Content-Type: application/json", (DWORD)-1L, WINHTTP_ADDREQ_FLAG_ADD);
+    if (extra_header) {
+        http_add_headers(http, extra_header, (DWORD)-1L,
+                         WINHTTP_ADDREQ_FLAG_ADD | WINHTTP_ADDREQ_FLAG_REPLACE);
+    }
+    size = body ? (DWORD)text_length(body) : 0;
+    if (!http_send(http, WINHTTP_NO_ADDITIONAL_HEADERS, 0,
+                   size ? (void *)body : WINHTTP_NO_REQUEST_DATA, size, size, 0) ||
+        !http_receive(http, NULL) ||
+        !http_query_headers(http, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
+                            WINHTTP_HEADER_NAME_BY_INDEX, &status, &status_size,
+                            WINHTTP_NO_HEADER_INDEX)) {
+        status = 0;
+        goto done;
+    }
+    for (;;) {
+        DWORD available = 0, read = 0;
+        if (!http_query_available(http, &available) || !available) {
+            break;
+        }
+        char chunk[512];
+        if (available > sizeof(chunk)) {
+            available = sizeof(chunk);
+        }
+        if (!http_read(http, chunk, available, &read) || !read) {
+            break;
+        }
+        for (DWORD i = 0; i < read && out && used + 1 < capacity; ++i) {
+            out[used++] = chunk[i];
+        }
+    }
+    if (out && capacity) {
+        out[used] = 0;
+    }
+done:
+    if (http) {
+        http_close(http);
+    }
+    if (connection) {
+        http_close(connection);
+    }
+    if (session) {
+        http_close(session);
+    }
+    return status;
 }
 
 static int net_write_all(SequentialStream *stream, const unsigned char *data, size_t size) {
@@ -1148,8 +1258,13 @@ static void net_read_settings(const wchar_t *directory) {
     GetPrivateProfileStringW(L"Network", L"Server", L"127.0.0.1:8081", value, ARRAY_COUNT(value),
                              ini);
     const wchar_t *server = value;
+    net_server_secure = 0;
     if (wide_starts_ignore_case(server, wide_length(server), L"http://")) {
         server += 7;
+    } else if (wide_starts_ignore_case(server, wide_length(server), L"https://")) {
+        server += 8;
+        net_server_secure = 1;
+        net_server_port = INTERNET_DEFAULT_HTTPS_PORT;
     }
     size_t length = 0, colon = (size_t)-1;
     while (server[length] && server[length] != L'/') {
