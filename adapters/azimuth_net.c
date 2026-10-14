@@ -2606,6 +2606,158 @@ static void net_reader_filter(void **statics) {
     *statics = ours;
 }
 
+/* Windows.Networking.Connectivity. The game's CLobby (FUN_140a2b900) sets its "connected to
+   Xbox Live" flag only when GetInternetConnectionProfile()->GetNetworkConnectivityLevel() is
+   4 (XboxLiveAccess, console-only). The profile Azimuth hands out never says 4, so the main
+   menu locks every online feature behind IDS_Popup_FeatureLocked_LSPDown_Message. These shims
+   forward everything to Azimuth's objects and only raise the level to 4. */
+static const unsigned char net_iid_network_information_statics[16] = {
+    0x51, 0xf8, 0x74, 0x50, 0x0d, 0x95, 0x65, 0x41,
+    0x9c, 0x15, 0x36, 0x56, 0x19, 0x48, 0x1e, 0xea};
+static const unsigned char net_iid_connection_profile[16] = {
+    0x3c, 0x14, 0xba, 0x71, 0x8e, 0x59, 0xd0, 0x49,
+    0x84, 0xeb, 0x8f, 0xeb, 0xae, 0xdc, 0xc1, 0x95};
+#define NET_XBOX_LIVE_ACCESS 4
+
+typedef struct NetShim NetShim;
+struct NetShim {
+    void *const *lpVtbl;
+    volatile LONG references;
+    NetCom *inner;
+    const unsigned char *iid;
+};
+typedef HRESULT(STDMETHODCALLTYPE *NetShimCall)(NetCom *, uintptr_t, uintptr_t, uintptr_t,
+                                                uintptr_t, uintptr_t);
+static volatile LONG net_connectivity_logged;
+
+static void *net_shim_slot(NetShim *self, unsigned slot) {
+    return ((void *const *)(const void *)self->inner->lpVtbl)[slot];
+}
+
+/* Methods past IInspectable take at most five integer or pointer arguments in these two
+   interfaces; passing five on is harmless for those that take fewer. */
+#define NET_SHIM_FORWARD(slot)                                                                 \
+    static HRESULT STDMETHODCALLTYPE net_shim_forward##slot(                                   \
+        NetShim *self, uintptr_t a, uintptr_t b, uintptr_t c, uintptr_t d, uintptr_t e) {       \
+        NetShimCall call = (NetShimCall)(uintptr_t)net_shim_slot(self, slot);                   \
+        return call(self->inner, a, b, c, d, e);                                               \
+    }
+NET_SHIM_FORWARD(3)
+NET_SHIM_FORWARD(4)
+NET_SHIM_FORWARD(5)
+NET_SHIM_FORWARD(6)
+NET_SHIM_FORWARD(8)
+NET_SHIM_FORWARD(9)
+NET_SHIM_FORWARD(10)
+NET_SHIM_FORWARD(11)
+NET_SHIM_FORWARD(12)
+NET_SHIM_FORWARD(13)
+NET_SHIM_FORWARD(14)
+#undef NET_SHIM_FORWARD
+
+static HRESULT STDMETHODCALLTYPE net_shim_query(NetShim *self, REFIID iid, void **out) {
+    if (!out) {
+        return E_POINTER;
+    }
+    *out = 0;
+    if (memory_equal(iid, net_iid_unknown, 16) || memory_equal(iid, net_iid_inspectable, 16) ||
+        memory_equal(iid, net_iid_agile, 16) || memory_equal(iid, self->iid, 16)) {
+        *out = self;
+        InterlockedIncrement(&self->references);
+        return S_OK;
+    }
+    return self->inner->lpVtbl->QueryInterface(self->inner, iid, out);
+}
+
+static ULONG STDMETHODCALLTYPE net_shim_add_ref(NetShim *self) {
+    return (ULONG)InterlockedIncrement(&self->references);
+}
+
+static ULONG STDMETHODCALLTYPE net_shim_release(NetShim *self) {
+    LONG left = InterlockedDecrement(&self->references);
+    if (!left) {
+        self->inner->lpVtbl->Release(self->inner);
+        net_free(self);
+    }
+    return (ULONG)left;
+}
+
+/* IConnectionProfile::GetNetworkConnectivityLevel */
+static HRESULT STDMETHODCALLTYPE net_profile_level(NetShim *self, int *level) {
+    typedef HRESULT(STDMETHODCALLTYPE * Call)(NetCom *, int *);
+    Call call = (Call)(uintptr_t)net_shim_slot(self, 7);
+    HRESULT result = call(self->inner, level);
+    int original = level ? *level : -1;
+    if (level) {
+        *level = NET_XBOX_LIVE_ACCESS;
+    }
+    if (!InterlockedExchange(&net_connectivity_logged, 1)) {
+        Buffer line = {0};
+        if (buffer_append_text(&line, "WINRT: connectivity level ") &&
+            buffer_append_number(&line, (unsigned)original) &&
+            buffer_append_text(&line, " (") && buffer_append_hresult(&line, result) &&
+            buffer_append_text(&line, ") reported as 4, XboxLiveAccess.\r\n")) {
+            log_append((const char *)line.data);
+        }
+        buffer_free(&line);
+    }
+    return level ? S_OK : result;
+}
+
+static NetShim *net_shim_wrap(NetCom *inner, void *const *vtable, const unsigned char *iid);
+
+/* INetworkInformationStatics::GetInternetConnectionProfile */
+static HRESULT STDMETHODCALLTYPE net_netinfo_profile(NetShim *self, NetCom **out) {
+    typedef HRESULT(STDMETHODCALLTYPE * Call)(NetCom *, NetCom **);
+    Call call = (Call)(uintptr_t)net_shim_slot(self, 7);
+    HRESULT result = call(self->inner, out);
+    if (SUCCEEDED(result) && out && *out) {
+        static void *const profile_vtable[15] = {
+            (void *)(uintptr_t)net_shim_query,     (void *)(uintptr_t)net_shim_add_ref,
+            (void *)(uintptr_t)net_shim_release,   (void *)(uintptr_t)net_shim_forward3,
+            (void *)(uintptr_t)net_shim_forward4,  (void *)(uintptr_t)net_shim_forward5,
+            (void *)(uintptr_t)net_shim_forward6,  (void *)(uintptr_t)net_profile_level,
+            (void *)(uintptr_t)net_shim_forward8,  (void *)(uintptr_t)net_shim_forward9,
+            (void *)(uintptr_t)net_shim_forward10, (void *)(uintptr_t)net_shim_forward11,
+            (void *)(uintptr_t)net_shim_forward12, (void *)(uintptr_t)net_shim_forward13,
+            (void *)(uintptr_t)net_shim_forward14};
+        NetShim *shim = net_shim_wrap(*out, profile_vtable, net_iid_connection_profile);
+        if (shim) {
+            *out = (NetCom *)(void *)shim;
+        }
+    }
+    return result;
+}
+
+static const void *const net_netinfo_vtable[14] = {
+    (void *)(uintptr_t)net_shim_query,     (void *)(uintptr_t)net_shim_add_ref,
+    (void *)(uintptr_t)net_shim_release,   (void *)(uintptr_t)net_shim_forward3,
+    (void *)(uintptr_t)net_shim_forward4,  (void *)(uintptr_t)net_shim_forward5,
+    (void *)(uintptr_t)net_shim_forward6,  (void *)(uintptr_t)net_netinfo_profile,
+    (void *)(uintptr_t)net_shim_forward8,  (void *)(uintptr_t)net_shim_forward9,
+    (void *)(uintptr_t)net_shim_forward10, (void *)(uintptr_t)net_shim_forward11,
+    (void *)(uintptr_t)net_shim_forward12, (void *)(uintptr_t)net_shim_forward13};
+
+/* Takes over the caller's reference to `inner`; on failure the caller keeps it. */
+static NetShim *net_shim_wrap(NetCom *inner, void *const *vtable, const unsigned char *iid) {
+    NetShim *shim = net_alloc(sizeof(*shim));
+    if (shim) {
+        shim->lpVtbl = vtable;
+        shim->references = 1;
+        shim->inner = inner;
+        shim->iid = iid;
+    }
+    return shim;
+}
+
+static void net_netinfo_filter(void **statics) {
+    NetShim *shim = net_shim_wrap((NetCom *)*statics, (void *const *)net_netinfo_vtable,
+                                  net_iid_network_information_statics);
+    if (shim) {
+        *statics = shim;
+    }
+}
+
 static int net_wide_equal(const wchar_t *left, const wchar_t *right) {
     while (*left && *left == *right) {
         ++left;
@@ -2627,6 +2779,11 @@ static HRESULT net_get_activation_factory(const wchar_t *name, const void *iid, 
     if (SUCCEEDED(result) && *out && iid && memory_equal(iid, net_iid_data_reader_statics, 16) &&
         net_wide_equal(name, L"Windows.Storage.Streams.DataReader")) {
         net_reader_filter(out);
+    }
+    if (SUCCEEDED(result) && *out && iid &&
+        memory_equal(iid, net_iid_network_information_statics, 16) &&
+        net_wide_equal(name, L"Windows.Networking.Connectivity.NetworkInformation")) {
+        net_netinfo_filter(out);
     }
     if (net_trace_first(name, result)) {
         Buffer line = {0};
