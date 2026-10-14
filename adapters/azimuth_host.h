@@ -35,6 +35,7 @@ DWORD azimuth_net_call(const wchar_t *method, const wchar_t *path, const wchar_t
 DWORD azimuth_net_request(const wchar_t *method, const wchar_t *path, const wchar_t *headers,
                           const wchar_t *content_type, const void *body, size_t body_size, void *out,
                           size_t capacity, size_t *received);
+int azimuth_net_ping(int timeout_ms);
 /* azimuth_cloud.c: the online profile's save, kept on the server. */
 void azimuth_cloud_start(const wchar_t *bin, const wchar_t *xuid, const wchar_t *token, const wchar_t *ini,
                          const wchar_t *section);
@@ -49,7 +50,7 @@ const wchar_t *azimuth_account_web_key(void);
 const wchar_t *azimuth_account_discriminator(void);
 const wchar_t *azimuth_account_server(void);
 int azimuth_account_valid_name(const wchar_t *name);
-int azimuth_account_register(const wchar_t *name, wchar_t *message, size_t cap);
+int azimuth_account_register(const wchar_t *name, int starter_car, wchar_t *message, size_t cap);
 int azimuth_account_new_web_key(wchar_t *message, size_t cap);
 int azimuth_account_add_friend(const wchar_t *gamertag, wchar_t *message, size_t cap);
 void azimuth_account_set_online(int online);

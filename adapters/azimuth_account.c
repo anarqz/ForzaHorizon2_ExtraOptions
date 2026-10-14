@@ -438,7 +438,7 @@ const wchar_t *azimuth_account_server(void) {
 
 /* Creates "name#12345" on the server (one account per PC). On success the account is kept
    with Online=1, so the next start plays as it. */
-int azimuth_account_register(const wchar_t *name, wchar_t *message, size_t cap) {
+int azimuth_account_register(const wchar_t *name, int starter_car, wchar_t *message, size_t cap) {
     static char reply[2048], body[256];
     char ascii[16];
     if (!account_available || !azimuth_account_valid_name(name)) {
@@ -453,7 +453,18 @@ int azimuth_account_register(const wchar_t *name, wchar_t *message, size_t cap) 
     text_add(body, sizeof(body), account_discriminator);
     text_add(body, sizeof(body), "\",\"device\":\"");
     text_add(body, sizeof(body), account_device);
-    text_add(body, sizeof(body), "\"}");
+    /* the first car (the server takes only the game's three) */
+    char car[12];
+    int digits = 0;
+    for (unsigned value = starter_car > 0 ? (unsigned)starter_car : 0; digits == 0 || value; value /= 10) {
+        car[digits++] = (char)('0' + value % 10);
+    }
+    text_add(body, sizeof(body), "\",\"starterCar\":");
+    while (digits) {
+        char one[2] = {car[--digits], 0};
+        text_add(body, sizeof(body), one);
+    }
+    text_add(body, sizeof(body), "}");
     DWORD status = azimuth_net_call(L"POST", L"/fh2online/v1/register", 0, body, reply, sizeof(reply));
     if (status != 200 || !account_take(reply) || !account_token[0]) {
         account_error(status, reply, message, cap);
@@ -598,6 +609,8 @@ int azimuth_account_banner(char *out, size_t cap, const char **color) {
     if (!account_available) {
         return 0;
     }
+    /* checked now, every time the pause menu opens (a short wait, so the menu never hangs) */
+    InterlockedExchange(&account_link, azimuth_net_ping(1000) ? 1 : 2);
     LONG link = account_link;
     if (account_active && link != 2) {
         wide_to_ascii(account_gamertag, tag, sizeof(tag));

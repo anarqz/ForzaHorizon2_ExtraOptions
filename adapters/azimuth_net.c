@@ -919,9 +919,28 @@ DWORD azimuth_net_call(const wchar_t *method, const wchar_t *path, const wchar_t
 /* As azimuth_net_call with a binary body: `headers` is NULL or "Name: value" lines joined by
    \r\n; the reply is copied as is to `out` (up to `capacity` bytes, `*received` set to how
    many). */
+static DWORD net_request(const wchar_t *method, const wchar_t *path, const wchar_t *headers,
+                         const wchar_t *content_type, const void *body, size_t body_size, void *out,
+                         size_t capacity, size_t *received, int timeout_ms);
+
 DWORD azimuth_net_request(const wchar_t *method, const wchar_t *path, const wchar_t *headers,
                           const wchar_t *content_type, const void *body, size_t body_size, void *out,
                           size_t capacity, size_t *received) {
+    return net_request(method, path, headers, content_type, body, body_size, out, capacity, received, 0);
+}
+
+/* Whether the server answers /fh2online/v1/info within timeout_ms (the pause menu's check). */
+int azimuth_net_ping(int timeout_ms) {
+    char reply[256];
+    size_t got = 0;
+    return net_request(L"GET", L"/fh2online/v1/info", 0, L"application/json", 0, 0, reply, sizeof(reply), &got,
+                       timeout_ms) == 200;
+}
+
+/* timeout_ms 0: 5 s to connect, 30 s to send and receive. */
+static DWORD net_request(const wchar_t *method, const wchar_t *path, const wchar_t *headers,
+                         const wchar_t *content_type, const void *body, size_t body_size, void *out,
+                         size_t capacity, size_t *received, int timeout_ms) {
     wchar_t type_header[96]; /* several threads call this at once */
     HINTERNET session = 0, connection = 0, http = 0;
     DWORD status = 0, status_size = sizeof(status), size = 0;
@@ -938,7 +957,11 @@ DWORD azimuth_net_request(const wchar_t *method, const wchar_t *path, const wcha
     if (!session) {
         goto done;
     }
-    http_set_timeouts(session, 5000, 5000, 30000, 30000);
+    if (timeout_ms > 0) {
+        http_set_timeouts(session, timeout_ms, timeout_ms, timeout_ms, timeout_ms);
+    } else {
+        http_set_timeouts(session, 5000, 5000, 30000, 30000);
+    }
     connection = http_connect(session, net_server_host, net_server_port, 0);
     http = connection ? http_open_request(connection, method, path, NULL, WINHTTP_NO_REFERER,
                                           WINHTTP_DEFAULT_ACCEPT_TYPES,
