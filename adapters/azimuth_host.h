@@ -37,6 +37,10 @@ DWORD azimuth_net_request(const wchar_t *method, const wchar_t *path, const wcha
                           const wchar_t *content_type, const void *body, size_t body_size, void *out,
                           size_t capacity, size_t *received);
 int azimuth_net_ping(int timeout_ms);
+/* GET https://<host><path> into `out` (azimuth_update.c reads the release from GitHub). */
+DWORD azimuth_net_fetch(const wchar_t *host, const wchar_t *path, void *out, size_t capacity, size_t *received);
+/* [Network] AutoUpdate (default 1). */
+int azimuth_net_auto_update(void);
 /* azimuth_cloud.c: the online profile's save, kept on the server. */
 void azimuth_cloud_start(const wchar_t *bin, const wchar_t *xuid, const wchar_t *token, const wchar_t *ini,
                          const wchar_t *section);
@@ -61,6 +65,12 @@ void azimuth_account_set_online(int online);
 void azimuth_account_restart(void);
 int azimuth_account_log_in(const wchar_t *gamertag, const wchar_t *web_key, wchar_t *message, size_t cap);
 const wchar_t *azimuth_account_notice(void);
+/* azimuth_update.c: the self-update, offered the server's latestHook / latestRelease. */
+enum { UPDATE_NONE, UPDATE_AVAILABLE, UPDATE_DOWNLOADING, UPDATE_INSTALLED };
+void azimuth_update_offer(const char *latest, const char *release);
+int azimuth_update_state(void);
+/* What the menu says about it (empty while there is no update). */
+const wchar_t *azimuth_update_text(void);
 void azimuth_account_test(wchar_t *out, size_t cap);
 int azimuth_account_banner(char *out, size_t cap, const char **color);
 
@@ -73,7 +83,7 @@ typedef struct {
     const char *icon;
     int photo;
 } InfinityTile;
-/* The 7 tiles for the profile's current state (azimuth_online_menu.c). */
+/* The 8 tiles for the profile's current state (azimuth_online_menu.c). */
 const InfinityTile *azimuth_infinity_tiles(void);
 /* azimuth_ui.c: the CREDITS + INFINITY tiles in Settings, the INFINITY screen and the
    pause menu's status line. */

@@ -29,14 +29,15 @@ int memory_read(const void *address, void *output, size_t size) {
     return 1;
 }
 
-static const InfinityTile test_tiles[7] = {
-    {"Alex#72178", "PauseMenuTileBackgrounds/HorizonOnline.png", 1},
+static const InfinityTile test_tiles[8] = {
+    {"PROFILE", "Icons/TiledMenus/Autoshow.png", 0},
     {"ADICIONAR AMIGO", "PauseMenuTileBackgrounds/MyRivals.png", 1},
     {"TESTAR CONEX\xc3\x83O", "PauseMenuTileBackgrounds/OnlineFreeroam.png", 1},
     {"AMIGOS", "Icons/TiledMenus/TeamCredits.png", 0},
     {"CHAVE DO SITE", "Icons/TiledMenus/Options.png", 0},
     {"TROCAR PERFIL", "Icons/TiledMenus/Garage.png", 0},
-    {0, 0, 0}};
+    {0, 0, 0},
+    {"UP TO DATE", "Icons/TiledMenus/AutoUpgrade.png", 0}};
 const InfinityTile *azimuth_infinity_tiles(void) {
     return test_tiles;
 }

@@ -613,13 +613,26 @@ void azimuth_account_test(wchar_t *out, size_t cap) {
     }
 }
 
-/* Pings the server every 15 s for the pause menu's status line. */
+/* The server's /info names the newest hook (latestHook, in release latestRelease): a newer one
+   than this is installed by azimuth_update.c. */
+static void account_check_update(const char *reply) {
+    static char latest[48], release[24];
+    if (json_string(reply, "latestHook", latest, sizeof(latest))) {
+        json_string(reply, "latestRelease", release, sizeof(release));
+        azimuth_update_offer(latest, release);
+    }
+}
+
+/* Pings the server every 15 s for the pause menu's status line (and the newest version). */
 static DWORD WINAPI account_link_thread(void *unused) {
-    static char reply[512];
+    static char reply[1024];
     (void)unused;
     for (;;) {
         DWORD status = azimuth_net_call(L"GET", L"/infinity/v1/info", 0, 0, reply, sizeof(reply));
         InterlockedExchange(&account_link, status == 200 ? 1 : 2);
+        if (status == 200) {
+            account_check_update(reply);
+        }
         account_sleep(15000);
     }
 }
@@ -635,7 +648,14 @@ int azimuth_account_banner(char *out, size_t cap, const char **color) {
     /* checked now, every time the pause menu opens (a short wait, so the menu never hangs) */
     InterlockedExchange(&account_link, azimuth_net_ping(1000) ? 1 : 2);
     LONG link = account_link;
-    if (account_active && link != 2) {
+    int update = azimuth_update_state();
+    if (update == UPDATE_INSTALLED) {
+        text_add(out, cap, "INFINITY  |  UPDATE INSTALLED  |  RESTART THE GAME");
+        *color = "#f5c400";
+    } else if (update == UPDATE_AVAILABLE && link != 2) {
+        text_add(out, cap, "INFINITY  |  UPDATE AVAILABLE  |  SEE SETTINGS > INFINITY");
+        *color = "#f5c400";
+    } else if (account_active && link != 2) {
         wide_to_ascii(account_gamertag, tag, sizeof(tag));
         text_add(out, cap, "INFINITY  |  CONNECTED  |  ");
         text_add(out, cap, tag);
@@ -657,6 +677,7 @@ int azimuth_account_banner(char *out, size_t cap, const char **color) {
 const wchar_t *azimuth_account_notice(void) {
     return account_notice;
 }
+
 
 /* A new site key (the old one stops working). */
 int azimuth_account_new_web_key(wchar_t *message, size_t cap) {

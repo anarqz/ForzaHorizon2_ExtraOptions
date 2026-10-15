@@ -14,6 +14,7 @@
    Texts are our own ITextSource objects (the CLocString interface: AddRef +0x10,
    Release +0x18, GetText +0x38). Server calls are synchronous (short timeouts). */
 #include "azimuth_host.h"
+#include "extra_options.h"
 #include "logging.h"
 #include "support.h"
 
@@ -300,6 +301,24 @@ static void menu_restart(void) {
     azimuth_account_restart();
 }
 
+/* The UPDATE tile (and, once a session, the first click on INFINITY while there is one). */
+static void menu_update(void) {
+    static const MenuButton restart[2] = {{L"Restart now", menu_restart}, {L"Later", menu_nothing}};
+    switch (azimuth_update_state()) {
+    case UPDATE_INSTALLED:
+        menu_popup(L"UPDATE INSTALLED", azimuth_update_text(), restart, 2);
+        break;
+    case UPDATE_AVAILABLE:
+    case UPDATE_DOWNLOADING:
+        menu_info(L"INFINITY UPDATE", azimuth_update_text());
+        break;
+    default:
+        menu_info(L"INFINITY UPDATE", L"ForzaInfinity " MOD_VERSION_WIDE L" is the newest version this server knows "
+                                      L"of.\n\nWhen a new one comes out it is installed by itself, and the game asks "
+                                      L"you to restart.");
+    }
+}
+
 static void menu_show_created(void) {
     static const MenuButton restart[1] = {{L"Restart now", menu_restart}};
     line_start();
@@ -509,6 +528,10 @@ static void menu_more(void) {
 
 static void menu_profile(void) {
     line_start();
+    if (azimuth_update_text()[0]) {
+        line_add(azimuth_update_text());
+        line_add(L"\n\n");
+    }
     if (azimuth_account_state() == 2) {
         line_add(L"Online profile: ");
         line_add(azimuth_account_gamertag());
@@ -536,17 +559,22 @@ static void menu_profile(void) {
 
 static void menu_about(void) {
     line_start();
-    line_add(L"ForzaInfinity: ghost races between friends.\n\nAdd a friend by their profile (Name#12345). "
-             L"Once you both add each other you become rivals: your best times and ghosts show up in each "
-             L"other's races.\n\nServer: ");
+    if (azimuth_update_text()[0]) {
+        line_add(azimuth_update_text());
+        line_add(L"\n\n");
+    }
+    line_add(L"ForzaInfinity: Forza Horizon 2 online again. Every player on the server shares the leaderboards, "
+             L"ghosts and drivatars.\n\nAdd a friend by their profile (Name#12345). Once you both add each other "
+             L"you become rivals: your best times show up in Meus Rivais, and you can message and challenge each "
+             L"other.\n\nServer: ");
     line_add(azimuth_account_server());
     menu_info(L"ABOUT INFINITY", menu_line);
 }
 
 /* ------------------------------------------------------- INFINITY screen */
 
-static InfinityTile menu_tiles[7];
-static MenuAction menu_tile_actions[7];
+static InfinityTile menu_tiles[8];
+static MenuAction menu_tile_actions[8];
 
 static void menu_set_tile(int i, const char *heading, const char *icon, int photo, MenuAction action) {
     menu_tiles[i].heading = heading;
@@ -555,18 +583,33 @@ static void menu_set_tile(int i, const char *heading, const char *icon, int phot
     menu_tile_actions[i] = action;
 }
 
-/* The tiles for the profile's state (slots: 0 tall photo, 1-2 wide, 3-6 small icons). The
-   actions are kept with them, so a click does what its tile said. */
+/* The tiles for the profile's state (slots: 0 and 7 the small PROFILE and UPDATE tiles of the
+   first column, 1-2 wide, 3-6 small icons). The actions are kept with them, so a click does
+   what its tile said. */
+static const char *menu_update_heading(void) {
+    switch (azimuth_update_state()) {
+    case UPDATE_INSTALLED:
+        return "RESTART TO UPDATE";
+    case UPDATE_DOWNLOADING:
+        return "UPDATING...";
+    case UPDATE_AVAILABLE:
+        return "UPDATE AVAILABLE";
+    default:
+        return "UP TO DATE";
+    }
+}
+
 const InfinityTile *azimuth_infinity_tiles(void) {
     int state = azimuth_account_state();
     if (state < 0) {
         return 0;
     }
-    for (int i = 0; i < 7; ++i) {
+    for (int i = 0; i < 8; ++i) {
         menu_set_tile(i, 0, 0, 0, 0);
     }
+    menu_set_tile(7, menu_update_heading(), "Icons/TiledMenus/AutoUpgrade.png", 0, menu_update);
     if (state == 2) {
-        menu_set_tile(0, "PROFILE", "PauseMenuTileBackgrounds/StartingGrid.png", 1, menu_profile);
+        menu_set_tile(0, "PROFILE", "Icons/TiledMenus/Autoshow.png", 0, menu_profile);
         menu_set_tile(1, "ADD FRIEND", "PauseMenuTileBackgrounds/MyRivals.png", 1, menu_add_friend);
         menu_set_tile(2, "TEST CONNECTION", "PauseMenuTileBackgrounds/OnlineFreeroam.png", 1, menu_test_connection);
         menu_set_tile(3, "SITE KEY", "Icons/TiledMenus/Options.png", 0, menu_show_key);
@@ -574,13 +617,13 @@ const InfinityTile *azimuth_infinity_tiles(void) {
         menu_set_tile(5, "ABOUT", "Icons/TiledMenus/TeamCredits.png", 0, menu_about);
         menu_set_tile(6, "LEAVE INFINITY", "Icons/TiledMenus/Difficulty.png", 0, menu_confirm_leave);
     } else if (state == 1) {
-        menu_set_tile(0, "PROFILE", "PauseMenuTileBackgrounds/StartingGrid.png", 1, menu_profile);
+        menu_set_tile(0, "PROFILE", "Icons/TiledMenus/Autoshow.png", 0, menu_profile);
         menu_set_tile(1, "JOIN AND RESTART", "PauseMenuTileBackgrounds/OnlineRoadtrip.png", 1, menu_join);
         menu_set_tile(2, "TEST CONNECTION", "PauseMenuTileBackgrounds/OnlineFreeroam.png", 1, menu_test_connection);
         menu_set_tile(3, "SWITCH PROFILE", "Icons/TiledMenus/Garage.png", 0, menu_log_in);
         menu_set_tile(4, "ABOUT", "Icons/TiledMenus/Options.png", 0, menu_about);
     } else {
-        menu_set_tile(0, "PROFILE", "PauseMenuTileBackgrounds/StartingGrid.png", 1, menu_profile);
+        menu_set_tile(0, "PROFILE", "Icons/TiledMenus/Autoshow.png", 0, menu_profile);
         menu_set_tile(1, "CREATE PROFILE", "PauseMenuTileBackgrounds/MyRivals.png", 1, menu_ask_name);
         menu_set_tile(2, "SIGN IN", "PauseMenuTileBackgrounds/OnlineRoadtrip.png", 1, menu_log_in);
         menu_set_tile(3, "TEST CONNECTION", "Icons/TiledMenus/Options.png", 0, menu_test_connection);
@@ -602,8 +645,9 @@ static void menu_tile_3(void *page) { menu_tile(3, page); }
 static void menu_tile_4(void *page) { menu_tile(4, page); }
 static void menu_tile_5(void *page) { menu_tile(5, page); }
 static void menu_tile_6(void *page) { menu_tile(6, page); }
-static MenuPageFn const menu_tile_handlers[7] = {menu_tile_0, menu_tile_1, menu_tile_2, menu_tile_3,
-                                                  menu_tile_4, menu_tile_5, menu_tile_6};
+static void menu_tile_7(void *page) { menu_tile(7, page); }
+static MenuPageFn const menu_tile_handlers[8] = {menu_tile_0, menu_tile_1, menu_tile_2, menu_tile_3,
+                                                  menu_tile_4, menu_tile_5, menu_tile_6, menu_tile_7};
 
 /* The popup version of the menu: used when the INFINITY screen cannot be opened. */
 static void menu_click(void *page) {
@@ -618,7 +662,7 @@ static void menu_click(void *page) {
             line_add(azimuth_account_notice());
             line_add(L"\n\n");
         }
-        line_add(L"ForzaInfinity: ghost races between friends.\n\nServer: ");
+        line_add(L"ForzaInfinity: Forza Horizon 2 online again.\n\nServer: ");
         line_add(azimuth_account_server());
         line_add(L"\nA new profile will read Name#");
         line_add(azimuth_account_discriminator());
@@ -701,24 +745,32 @@ static void menu_default_focus(void *page) {
 static int menu_infinity_screen_off;
 
 static void menu_infinity_click(void *page) {
+    static int update_shown;
     menu_page = page;
+    /* once a session, an update says so first (the next click opens the menu) */
+    int update = azimuth_update_state();
+    if ((update == UPDATE_INSTALLED || update == UPDATE_AVAILABLE) && !update_shown) {
+        update_shown = 1;
+        menu_update();
+        return;
+    }
     if (menu_infinity_screen_off || azimuth_account_state() < 0 || !azimuth_ui_open_infinity(page)) {
         menu_click(page);
     }
 }
 
 /* After the game binds its own tiles, ours: PART_Button_Infinity on Settings and
-   PART_Button_I0..I6 on the INFINITY screen (the same page class; a page has only its own
+   PART_Button_I0..I7 on the INFINITY screen (the same page class; a page has only its own
    buttons, binding a missing name does nothing). A handler is a member-function pointer pair
    {function, this adjustment}. */
 static void menu_init(void *page) {
-    static void *handlers[8][2];
-    static const char *const names[8] = {"PART_Button_Infinity", "PART_Button_I0", "PART_Button_I1",
+    static void *handlers[9][2];
+    static const char *const names[9] = {"PART_Button_Infinity", "PART_Button_I0", "PART_Button_I1",
                                          "PART_Button_I2",       "PART_Button_I3", "PART_Button_I4",
-                                         "PART_Button_I5",       "PART_Button_I6"};
+                                         "PART_Button_I5",       "PART_Button_I6", "PART_Button_I7"};
     MenuBindButtonFn bind = (MenuBindButtonFn)(uintptr_t)(menu_game + MENU_BIND_BUTTON_RVA);
     menu_init_original(page);
-    for (int i = 0; i < 8; ++i) {
+    for (int i = 0; i < 9; ++i) {
         handlers[i][0] = (void *)(uintptr_t)(i ? menu_tile_handlers[i - 1] : menu_infinity_click);
         bind(page, names[i], (void *const *)handlers[i]);
     }

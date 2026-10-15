@@ -55,6 +55,7 @@ static int net_mode;
 static wchar_t net_server_host[256];
 static INTERNET_PORT net_server_port = 8081;
 static int net_server_secure; /* https:// in [Network] Server */
+static int net_auto_update = 1; /* [Network] AutoUpdate (azimuth_update.c) */
 static wchar_t net_log_path[PATH_CAPACITY];
 static unsigned char *net_azimuth_base;
 static volatile LONG net_next_id;
@@ -919,6 +920,10 @@ DWORD azimuth_net_call(const wchar_t *method, const wchar_t *path, const wchar_t
 static DWORD net_request(const wchar_t *method, const wchar_t *path, const wchar_t *headers,
                          const wchar_t *content_type, const void *body, size_t body_size, void *out,
                          size_t capacity, size_t *received, int timeout_ms);
+static DWORD net_request_at(const wchar_t *host, INTERNET_PORT port, int secure, const wchar_t *method,
+                            const wchar_t *path, const wchar_t *headers, const wchar_t *content_type,
+                            const void *body, size_t body_size, void *out, size_t capacity, size_t *received,
+                            int timeout_ms);
 
 DWORD azimuth_net_request(const wchar_t *method, const wchar_t *path, const wchar_t *headers,
                           const wchar_t *content_type, const void *body, size_t body_size, void *out,
@@ -934,10 +939,30 @@ int azimuth_net_ping(int timeout_ms) {
                        timeout_ms) == 200;
 }
 
+/* A GET of https://<host><path> (not the game's server: the self-update reads the release from
+   GitHub), redirects followed as WinHTTP does by default. As azimuth_net_request otherwise. */
+DWORD azimuth_net_fetch(const wchar_t *host, const wchar_t *path, void *out, size_t capacity, size_t *received) {
+    return net_request_at(host, INTERNET_DEFAULT_HTTPS_PORT, 1, L"GET", path, 0, L"application/octet-stream", 0, 0,
+                          out, capacity, received, 0);
+}
+
+/* [Network] AutoUpdate (default on): whether the hook installs a newer release by itself. */
+int azimuth_net_auto_update(void) {
+    return net_auto_update;
+}
+
 /* timeout_ms 0: 5 s to connect, 30 s to send and receive. */
 static DWORD net_request(const wchar_t *method, const wchar_t *path, const wchar_t *headers,
                          const wchar_t *content_type, const void *body, size_t body_size, void *out,
                          size_t capacity, size_t *received, int timeout_ms) {
+    return net_request_at(net_server_host, net_server_port, net_server_secure, method, path, headers, content_type,
+                          body, body_size, out, capacity, received, timeout_ms);
+}
+
+static DWORD net_request_at(const wchar_t *host, INTERNET_PORT port, int secure, const wchar_t *method,
+                            const wchar_t *path, const wchar_t *headers, const wchar_t *content_type,
+                            const void *body, size_t body_size, void *out, size_t capacity, size_t *received,
+                            int timeout_ms) {
     wchar_t type_header[96]; /* several threads call this at once */
     HINTERNET session = 0, connection = 0, http = 0;
     DWORD status = 0, status_size = sizeof(status), size = 0;
@@ -959,10 +984,9 @@ static DWORD net_request(const wchar_t *method, const wchar_t *path, const wchar
     } else {
         http_set_timeouts(session, 5000, 5000, 30000, 30000);
     }
-    connection = http_connect(session, net_server_host, net_server_port, 0);
+    connection = http_connect(session, host, port, 0);
     http = connection ? http_open_request(connection, method, path, NULL, WINHTTP_NO_REFERER,
-                                          WINHTTP_DEFAULT_ACCEPT_TYPES,
-                                          net_server_secure ? WINHTTP_FLAG_SECURE : 0)
+                                          WINHTTP_DEFAULT_ACCEPT_TYPES, secure ? WINHTTP_FLAG_SECURE : 0)
                       : 0;
     if (!http) {
         goto done;
@@ -1304,6 +1328,8 @@ static void net_read_settings(const wchar_t *directory) {
     } else if (wide_starts_ignore_case(value, wide_length(value), L"capture")) {
         net_mode = NET_MODE_CAPTURE;
     }
+    GetPrivateProfileStringW(L"Network", L"AutoUpdate", L"1", value, ARRAY_COUNT(value), ini);
+    net_auto_update = !(value[0] == L'0' || wide_starts_ignore_case(value, wide_length(value), L"off"));
     GetPrivateProfileStringW(L"Network", L"Server", L"127.0.0.1:8081", value, ARRAY_COUNT(value),
                              ini);
     const wchar_t *server = value;

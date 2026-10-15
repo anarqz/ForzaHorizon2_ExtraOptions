@@ -235,11 +235,11 @@ static DWORD WINAPI ui_status_thread(void *unused) {
 /* The INFINITY screen is the Settings page class shown again by a new flow exit
    ("infinity", added below), with its tiles replaced: same grid, same styles. Each slot is
    {style, template, grid x, grid y, x coordinate, y coordinate}. */
-static const char *const ui_slots[7][6] = {
-    {"1x2", "VerticalImageTile", "0", "0", "X_0", "Y_0"},   {"2x1", "HorizontalImageTile", "1", "0", "X_1", "Y_0"},
+static const char *const ui_slots[8][6] = {
+    {"1x1", "IconTile", "0", "0", "X_0", "Y_0"},             {"2x1", "HorizontalImageTile", "1", "0", "X_1", "Y_0"},
     {"2x1", "HorizontalImageTile", "1", "1", "X_1", "Y_1"}, {"1x1", "IconTile", "3", "0", "X_3", "Y_0"},
     {"1x1", "IconTile", "3", "1", "X_3", "Y_1"},             {"1x1", "IconTile", "4", "0", "X_4", "Y_0"},
-    {"1x1", "IconTile", "4", "1", "X_4", "Y_1"}};
+    {"1x1", "IconTile", "4", "1", "X_4", "Y_1"},             {"1x1", "IconTile", "0", "1", "X_0", "Y_1"}};
 
 static char ui_infinity_buffer[UI_OPTIONS_MAX];
 static UiText ui_infinity = {ui_infinity_buffer, 0, UI_OPTIONS_MAX};
@@ -267,7 +267,7 @@ static int ui_edit_infinity(const char *page, unsigned length, UiText *out) {
     if (!ui_copy(out, &at, item_end + 2, 0, 0)) {
         return 0;
     }
-    for (int i = 0; i < 7; ++i) {
+    for (int i = 0; i < 8; ++i) {
         if (!tiles[i].heading) {
             continue;
         }
@@ -296,11 +296,11 @@ static int ui_edit_infinity(const char *page, unsigned length, UiText *out) {
                  "                                        Canvas.Left=\"{StaticResource A_Double_TileCoord_X_4}\"\r\n"
                  "                                        Canvas.Top=\"{StaticResource A_Double_TileCoord_Y_0}\"\r\n"
                  "                                        Template=\"{StaticResource A_ControlTemplate_IconTile}\"\r\n"
-                 "                                        local:UIPageTransitionManager.TransitionIndex=\"7\"\r\n"
+                 "                                        local:UIPageTransitionManager.TransitionIndex=\"8\"\r\n"
                  "                                        local:BindingProxy.C=\"DisableMotionBlur\"/>")) {
         return 0;
     }
-    for (int i = 0; i < 7; ++i) {
+    for (int i = 0; i < 8; ++i) {
         const char *const *slot = ui_slots[i];
         if (!tiles[i].heading) {
             continue;

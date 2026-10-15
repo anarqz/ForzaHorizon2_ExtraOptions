@@ -248,6 +248,11 @@ static int parse_ini(char *text, ModOptions *options) {
             if (text_equal_ignore_case(key, "Server") && *value) {
                 continue;
             }
+            /* the self-update (adapters/azimuth_update.c): 1 (default) or 0 */
+            if (text_equal_ignore_case(key, "AutoUpdate") &&
+                (text_equal_ignore_case(value, "0") || text_equal_ignore_case(value, "1"))) {
+                continue;
+            }
             goto invalid;
         }
         /* FH2Online: [Account] Name is checked by adapters/azimuth_account.c (a bad name only
