@@ -74,11 +74,11 @@ static int spit(const char *path, const char *suffix, const UiText *text) {
     return 1;
 }
 
-/* usage: ui_edits_test options.xaml pause.xaml ui_screens.xml pause_flow.xml */
+/* usage: ui_edits_test options.xaml pause.xaml ui_screens.xml pause_flow.xml [MessageCenter.str ...] */
 int main(int argc, char **argv) {
     unsigned n;
     char *page;
-    if (argc != 5) {
+    if (argc < 5) {
         return 2;
     }
     int ok = 1;
@@ -94,6 +94,13 @@ int main(int argc, char **argv) {
     page = slurp(argv[4], &n);
     ok &= page && ui_replace_anchors(page, n, ui_pause_flow_edits, ARRAY_COUNT(ui_pause_flow_edits) / 2, &ui_pause_flow) &&
           spit(argv[4], "flow", &ui_pause_flow);
+    for (int i = 5; i < argc; ++i) {
+        page = slurp(argv[i], &n);
+        unsigned changed = page ? ui_edit_message_center((unsigned char *)page, n) : 0;
+        UiText table = {page, n, n + 1};
+        printf("%s: %u texts\n", argv[i], changed);
+        ok &= changed > 0 && spit(argv[i], "mc", &table);
+    }
     printf(ok ? "all edits built\n" : "SOME EDIT FAILED\n");
     return ok ? 0 : 1;
 }

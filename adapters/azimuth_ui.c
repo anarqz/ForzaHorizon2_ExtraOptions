@@ -477,6 +477,174 @@ int azimuth_ui_open_infinity(void *page) {
     log_append("UI: INFINITY clicked; flow exit taken.\r\n");
     return 1;
 }
+/* ------------------------------------------------------- message center */
+
+/* The Message Center's texts (MessageCenter.str in media/stripped/stringtables/<language>.zip,
+   LSB2: see server/src/strtable.rs) name Turn 10 as the sender of the server's messages. In
+   each language the team's name (key 0x229b) becomes INFINITY in every text that holds it
+   (also spelled without the space in "Turn 10"), and the list title (0x3232, "TURN 10
+   MESSAGE") becomes INFINITY. A text is rewritten in place and never grows, so the table keeps
+   its layout; one that INFINITY does not fit in stays as it is. The files are told apart by
+   their size (each language's is different; cz and HU are the same file). */
+static const unsigned ui_message_center_sizes[] = {10516u, 12210u, 12604u, 15664u, 15668u, 15670u, 15906u, 16050u,
+                                                   16189u, 16346u, 16372u, 16604u, 16648u, 16982u, 17058u, 17274u};
+#define UI_STRINGS_MAX 17280u
+#define UI_STRINGS_TEXT 600u
+static char ui_strings_buffer[UI_STRINGS_MAX];
+static UiText ui_strings = {ui_strings_buffer, 0, UI_STRINGS_MAX};
+static volatile LONG ui_logged_strings;
+
+static int ui_is_message_center(long long size) {
+    for (unsigned i = 0; i < ARRAY_COUNT(ui_message_center_sizes); ++i) {
+        if (size == (long long)ui_message_center_sizes[i]) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static unsigned ui_u16(const unsigned char *p) {
+    return (unsigned)p[0] | (unsigned)p[1] << 8;
+}
+
+static unsigned ui_u32(const unsigned char *p) {
+    return ui_u16(p) | ui_u16(p + 2) << 16;
+}
+
+/* `text` with every `find` (n units) replaced by `with`, into `out` (cap units); its length,
+   or `count` + 1 when it did not fit. */
+static unsigned ui_wide_replace(const wchar_t *text, unsigned count, const wchar_t *find, unsigned n,
+                                const wchar_t *with, unsigned w, wchar_t *out, unsigned cap) {
+    unsigned at = 0, length = 0;
+    while (at < count) {
+        if (n && at + n <= count && memory_equal(text + at, find, n * sizeof(wchar_t))) {
+            for (unsigned i = 0; i < w; ++i) {
+                if (length >= cap) {
+                    return count + 1;
+                }
+                out[length++] = with[i];
+            }
+            at += n;
+        } else {
+            if (length >= cap) {
+                return count + 1;
+            }
+            out[length++] = text[at++];
+        }
+    }
+    return length;
+}
+
+/* A sender line still naming Turn 10 ("De : l'equipe de communaute Turn 10", "Van: Communityteam
+   Turn 10"): everything after its label's colon becomes INFINITY. `text` is changed in place
+   (never longer); returns its length. */
+static unsigned ui_sender_line(wchar_t *text, unsigned length) {
+    static const wchar_t infinity[] = L"INFINITY";
+    unsigned line = 0, colon = 0, turn = 0;
+    while (line < length && text[line] != L'\n') {
+        ++line;
+    }
+    for (unsigned i = 0; i < line; ++i) {
+        if (!colon && (text[i] == L':' || text[i] == 0xff1a)) {
+            colon = i + 1;
+        }
+        if (i + 4 <= line && (text[i] == L'T' || text[i] == L't') && (text[i + 1] | 0x20) == L'u' &&
+            (text[i + 2] | 0x20) == L'r' && (text[i + 3] | 0x20) == L'n') {
+            turn = 1;
+        }
+    }
+    while (colon && colon < line && text[colon] == L' ') {
+        ++colon;
+    }
+    unsigned w = ARRAY_COUNT(infinity) - 1;
+    if (!turn || !colon || colon + w > line) {
+        return length;
+    }
+    memory_copy(text + colon, infinity, w * sizeof(wchar_t));
+    for (unsigned i = line; i < length; ++i) {
+        text[colon + w + (i - line)] = text[i];
+    }
+    return length - (line - colon - w);
+}
+
+/* Rewrites `table` (`size` bytes) in place; returns how many texts changed. */
+static unsigned ui_edit_message_center(unsigned char *table, unsigned size) {
+    static const wchar_t infinity[] = L"INFINITY";
+    static wchar_t text[UI_STRINGS_TEXT], first[UI_STRINGS_TEXT], second[UI_STRINGS_TEXT];
+    wchar_t team[64], tight[64];
+    unsigned team_units = 0, tight_units = 0, changed = 0;
+    if (size < 0x2c || !memory_equal(table, "LSB2", 4)) {
+        return 0;
+    }
+    unsigned count = ui_u32(table + 0x28), texts = 0x2c + 6 * count + 6;
+    if (count > 4096 || texts >= size) {
+        return 0;
+    }
+    /* pass 0 reads the team's name, pass 1 rewrites */
+    for (int pass = 0; pass < 2; ++pass) {
+        for (unsigned i = 0; i < count; ++i) {
+            unsigned key = ui_u16(table + 0x2c + 6 * i);
+            unsigned long long at = texts + 2ull * ui_u32(table + 0x2e + 6 * i);
+            unsigned units = 0;
+            while (at + 2 * units + 1 < size && units < UI_STRINGS_TEXT && ui_u16(table + at + 2 * units)) {
+                text[units] = (wchar_t)ui_u16(table + at + 2 * units);
+                ++units;
+            }
+            if (at + 2 * units + 1 >= size || units >= UI_STRINGS_TEXT) {
+                continue;
+            }
+            if (pass == 0) {
+                if (key == 0x229b && units >= ARRAY_COUNT(infinity) - 1 && units < ARRAY_COUNT(team)) {
+                    memory_copy(team, text, units * sizeof(wchar_t));
+                    team_units = units;
+                    /* "Turn 10" also appears as "Turn10" */
+                    for (unsigned k = 0; k < units; ++k) {
+                        if (!(text[k] == L' ' && k + 2 < units && text[k + 1] == L'1' && text[k + 2] == L'0' && k >= 4 &&
+                              (text[k - 1] == L'n' || text[k - 1] == L'N'))) {
+                            tight[tight_units++] = text[k];
+                        }
+                    }
+                }
+                continue;
+            }
+            unsigned length;
+            const wchar_t *result = second;
+            if (key == 0x3232) {
+                memory_copy(second, infinity, sizeof(infinity) - sizeof(wchar_t));
+                length = ARRAY_COUNT(infinity) - 1;
+            } else {
+                unsigned a = ui_wide_replace(text, units, team, team_units, infinity, ARRAY_COUNT(infinity) - 1, first,
+                                             UI_STRINGS_TEXT);
+                if (a > units) {
+                    continue;
+                }
+                length = tight_units != team_units
+                             ? ui_wide_replace(first, a, tight, tight_units, infinity, ARRAY_COUNT(infinity) - 1, second,
+                                               UI_STRINGS_TEXT)
+                             : a;
+                if (tight_units == team_units) {
+                    result = first;
+                }
+                length = ui_sender_line((wchar_t *)result, length);
+            }
+            if (length > units || (length == units && memory_equal(result, text, units * sizeof(wchar_t)))) {
+                continue;
+            }
+            for (unsigned k = 0; k < length; ++k) {
+                table[at + 2 * k] = (unsigned char)(result[k] & 0xff);
+                table[at + 2 * k + 1] = (unsigned char)(result[k] >> 8);
+            }
+            table[at + 2 * length] = 0;
+            table[at + 2 * length + 1] = 0;
+            ++changed;
+        }
+        if (pass == 0 && !team_units) {
+            return 0;
+        }
+    }
+    return changed;
+}
+
 /* ------------------------------------------------------------- the hook */
 
 /* Reads a stream of exactly `size` bytes into ui_source; 1 when it holds `marker`. */
@@ -535,6 +703,22 @@ static void ui_replace_flow(void **out, void *stream, unsigned size, const char 
 
 static void ui_replace(void **out, void *stream) {
     long long size = ((UiRemainingFn)ui_slot(stream, 0x50))(stream);
+    if (ui_is_message_center(size)) {
+        unsigned changed;
+        if (!ui_read(stream, (unsigned)size, "LSB2")) {
+            ui_rewind(stream);
+            return;
+        }
+        memory_copy(ui_strings.data, ui_source, (size_t)size);
+        ui_strings.length = (unsigned)size;
+        changed = ui_edit_message_center((unsigned char *)ui_strings.data, ui_strings.length);
+        if (!changed || !ui_serve(out, stream, &ui_strings)) {
+            ui_rewind(stream);
+        } else if (InterlockedIncrement(&ui_logged_strings) <= 3) {
+            log_append("UI: Message Center texts name INFINITY as the sender.\r\n");
+        }
+        return;
+    }
     if (size == UI_SCREENS_SIZE && !ui_screens_failed) {
         ui_replace_flow(out, stream, UI_SCREENS_SIZE, "<state id=\"show_my_profile\">", ui_screens_edits,
                         ARRAY_COUNT(ui_screens_edits) / 2, &ui_screens, &ui_screens_failed, "ui_screens.xml");
