@@ -1096,6 +1096,11 @@ static int net_write_all(SequentialStream *stream, const unsigned char *data, si
 static DWORD WINAPI net_worker(void *parameter) {
     NetRequest *request = parameter;
     HRESULT error = NET_OFFLINE_ERROR;
+    if (net_mode == NET_MODE_PROXY && !request->aborted) {
+        /* a private free roam session opens this PC's world before the server sees it */
+        azimuth_world_on_request(buffer_wide(&request->method), buffer_wide(&request->url),
+                                 request->request_body.data, request->request_body.size);
+    }
     int answered = net_mode == NET_MODE_PROXY && !request->aborted && net_forward(request, &error);
     if (request->aborted) {
         answered = 0;

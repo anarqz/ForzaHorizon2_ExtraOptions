@@ -751,6 +751,7 @@ static ULONG STDMETHODCALLTYPE fr_assoc_release(FrAssociation *self) {
 static HRESULT STDMETHODCALLTYPE fr_assoc_destroy(FrAssociation *self, void **out) {
     (void)self;
     fr_log("association DestroyAsync -> completed.");
+    azimuth_world_left();
     return fr_completed(0, out);
 }
 static HRESULT STDMETHODCALLTYPE fr_assoc_remote_bytes(FrAssociation *self, UINT32 length, BYTE *bytes) {
@@ -1243,7 +1244,6 @@ void azimuth_apply_freeroam(unsigned char *game_image, const wchar_t *directory)
     if (!path_join(ini, directory, MOD_INI_NAME)) {
         return;
     }
-    azimuth_world_set_directory(directory);
     GetPrivateProfileStringW(L"FreeRoam", L"Enabled", L"0", value, ARRAY_COUNT(value), ini);
     fr_enabled = value[0] == L'1';
     if (!fr_enabled) {
@@ -1256,6 +1256,7 @@ void azimuth_apply_freeroam(unsigned char *game_image, const wchar_t *directory)
         return;
     }
     fr_game = game_image;
+    azimuth_world_set_directory(directory);
     GetPrivateProfileStringW(L"FreeRoam", L"World", L"", fr_world_override,
                              ARRAY_COUNT(fr_world_override), ini);
     fr_base64_encode("fh2inf:local", fr_local_base64, ARRAY_COUNT(fr_local_base64));

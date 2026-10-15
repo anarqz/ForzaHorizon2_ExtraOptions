@@ -571,10 +571,12 @@ static void menu_world_status(void) {
     for (unsigned i = 0; i < m; ++i) number[n + 1 + i] = digits[m - 1 - i];
     number[n + 1 + m] = 0;
     menu_line_raw(number);
-    line_add(has_password ? L"\nWith a password: it is not on the list; friends join it from your player card."
+    line_add(!azimuth_world_listed() ? L"\nPrivate session: it is not on the list; friends join it from your player card."
+             : has_password ? L"\nWith a password: it is not on the list; friends join it from your player card."
              : visibility[0] == 'f' ? L"\nFriends only."
              : visibility[0] == 'o' ? L"\nPrivate: nobody finds it."
                                     : L"\nOn the list for everybody.");
+    line_add(L"\nTo close it, go back to HORIZON SOLO (Start).");
     line_add(L"\n\nSettings (name, password, players, friends only): ");
     menu_line_raw(azimuth_world_config_path());
     line_add(L"\nThey apply the next time you open the world.");
@@ -582,17 +584,25 @@ static void menu_world_status(void) {
     menu_popup(L"HOST WORLD", menu_line, buttons, 2);
 }
 
-static void menu_world(void) {
-    if (azimuth_world_hosting()) {
-        menu_world_status();
-        return;
-    }
+static void menu_world_open(void) {
     const wchar_t *why = L"";
     if (azimuth_world_start(&why)) {
         menu_world_status();
     } else {
         menu_info(L"HOST WORLD", why);
     }
+}
+
+static void menu_world(void) {
+    if (azimuth_world_hosting()) {
+        menu_world_status();
+        return;
+    }
+    static const MenuButton buttons[2] = {{L"Host", menu_world_open}, {L"Cancel", menu_nothing}};
+    menu_popup(L"HOST WORLD",
+               L"Your world will be public: anyone who goes to FREE ROAM ONLINE can be sent to it.\n\n"
+               L"For a world only your friends join, use the game's private online session instead.",
+               buttons, 2);
 }
 
 static void menu_test_connection(void) {

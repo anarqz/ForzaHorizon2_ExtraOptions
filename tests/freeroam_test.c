@@ -39,6 +39,8 @@ int azimuth_net_proxy_enabled(void) {
 void azimuth_world_set_directory(const wchar_t *directory) {
     (void)directory;
 }
+void azimuth_world_left(void) {
+}
 
 /* Azimuth's HSTRING layout, as fr_hstring reads it. */
 typedef struct {

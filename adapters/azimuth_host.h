@@ -102,6 +102,9 @@ int azimuth_world_hosting(void);
 unsigned azimuth_world_players(void);
 const wchar_t *azimuth_world_config_path(void);
 int azimuth_world_start(const wchar_t **why);
+int azimuth_world_listed(void);
+void azimuth_world_left(void);
+void azimuth_world_on_request(const wchar_t *method, const wchar_t *url, const unsigned char *body, size_t size);
 void azimuth_world_stop(void);
 void azimuth_world_describe(char *visibility, size_t visibility_capacity, int *has_password,
                             unsigned *max_players, unsigned *port);

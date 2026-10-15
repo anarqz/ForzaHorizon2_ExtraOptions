@@ -6,10 +6,18 @@
    Object with KILL_ON_JOB_CLOSE: the job's only handle is this process's, so when the game
    ends (closed, crashed or killed) Windows closes it and the relay dies with it.
 
+   Two ways in:
+   - HOSPEDAR MUNDO (INFINITY screen): a public world, on the server's list and in the
+     automatic FREE ROAM ONLINE join;
+   - the game's own SESSÃO ONLINE PARTICULAR > PASSEIO LIVRE ONLINE PARTICULAR: the session it
+     writes (constants.custom.gameServerPlatform, hopperId 2, no matchmaking) is seen on its way
+     to the server (azimuth_world_on_request) and the world opens first, unlisted: only
+     ENTRAR NO MUNDO reaches it.
    While the world is on, a thread announces it to the ForzaInfinity server every 15 s
-   (POST /infinity/v1/worlds: the world's name, visibility, password, player limit, port and
-   this PC's LAN address); the server sends players to it (freeroam.rs). ENCERRAR MUNDO, or
-   the relay ending, stops it (DELETE /infinity/v1/worlds). */
+   (POST /infinity/v1/worlds: the world's name, visibility, password, player limit, port,
+   whether it is listed and this PC's LAN address); the server sends players to it
+   (freeroam.rs). Leaving the online session (HORIZON SOLO: the association's DestroyAsync),
+   "Close world", or the relay ending, stops it (DELETE /infinity/v1/worlds). */
 #include "azimuth_host.h"
 #include "logging.h"
 #include "support.h"
@@ -23,7 +31,7 @@
 static wchar_t world_directory[PATH_CAPACITY];
 static HANDLE world_job, world_process;
 /* world_generation: each world's heartbeat thread stops once it changes. */
-static volatile LONG world_on, world_generation;
+static volatile LONG world_on, world_generation, world_listed;
 static SRWLOCK world_lock = SRWLOCK_INIT;
 
 /* What server.cfg says (UTF-8 values, as they go into the announcement). */
@@ -380,7 +388,7 @@ static DWORD world_announce(void) {
     if (world_lan[0]) {
         world_add_json(&t, world_lan);
     }
-    world_add(&t, "],\"version\":");
+    world_add(&t, world_listed ? "],\"listed\":true,\"version\":" : "],\"listed\":false,\"version\":");
     world_add_json(&t, MOD_VERSION);
     world_add(&t, "}");
     ReleaseSRWLockExclusive(&world_lock);
@@ -473,7 +481,7 @@ static int world_job_ready(void) {
 }
 
 /* 1 started, 0 failed (`why` says it in English, for azimuth_tr). */
-int azimuth_world_start(const wchar_t **why) {
+static int world_open(int listed, const wchar_t **why) {
     static wchar_t exe[PATH_CAPACITY], log_path[PATH_CAPACITY], command[PATH_CAPACITY + 64];
     static STARTUPINFOW startup;
     static PROCESS_INFORMATION process;
@@ -550,6 +558,7 @@ int azimuth_world_start(const wchar_t **why) {
     CloseHandle(process.hThread);
     world_process = process.hProcess;
     world_players = 1;
+    InterlockedExchange(&world_listed, listed);
     InterlockedExchange(&world_on, 1);
     log_append("WORLD: dedicated_server.exe started (killed with the game).\r\n");
     DWORD status = world_announce();
@@ -567,8 +576,55 @@ int azimuth_world_start(const wchar_t **why) {
     return 1;
 }
 
+int azimuth_world_start(const wchar_t **why) {
+    return world_open(1, why);
+}
+
+int azimuth_world_listed(void) {
+    return world_listed != 0;
+}
+
 void azimuth_world_stop(void) {
-    world_end("ENCERRAR MUNDO");
+    world_end("Close world");
+}
+
+/* The association with the world was destroyed: the game left the online session (HORIZON
+   SOLO), or a join failed. The world this PC hosts goes with it. */
+void azimuth_world_left(void) {
+    if (world_on) {
+        world_end("left the online session");
+    }
+}
+
+static int world_has(const unsigned char *data, size_t size, const char *needle) {
+    return data && text_find((const char *)data, size, needle) != 0;
+}
+
+static int world_wide_has(const wchar_t *text, const wchar_t *needle) {
+    for (; text && *text; ++text) {
+        size_t i = 0;
+        while (needle[i] && text[i] == needle[i]) {
+            ++i;
+        }
+        if (!needle[i]) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/* Every request of the game, before it is forwarded (azimuth_net.c, a worker thread): a
+   private free roam session being written opens this PC's world first, so the server's
+   answer already points the game at it. */
+void azimuth_world_on_request(const wchar_t *method, const wchar_t *url, const unsigned char *body, size_t size) {
+    if (!world_directory[0] || world_on || !method || method[0] != L'P' || method[1] != L'U' ||
+        !world_wide_has(url, L"sessiondirectory.xboxlive.com") || !world_has(body, size, "\"gameServerPlatform\"") ||
+        !world_has(body, size, "\"hopperId\":2") || world_has(body, size, "\"matchmaking\"")) {
+        return;
+    }
+    const wchar_t *why = L"";
+    log_append(world_open(0, &why) ? "WORLD: private free roam session: this PC hosts it (unlisted).\r\n"
+                                   : "WORLD: private free roam session, but the world did not open.\r\n");
 }
 
 /* What server.cfg says, for the popup. */
