@@ -41,6 +41,9 @@ static const InfinityTile test_tiles[8] = {
 const InfinityTile *azimuth_infinity_tiles(void) {
     return test_tiles;
 }
+void azimuth_lang_set_portuguese(int on) {
+    (void)on;
+}
 int azimuth_account_banner(char *out, size_t cap, const char **color) {
     snprintf(out, cap, "INFINITY  |  SEM CONEX\xc3\x83O COM O SERVIDOR");
     *color = "#ff4f4f";

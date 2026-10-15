@@ -209,9 +209,12 @@ static void ui_status_write(void) {
     if (!ui_status_text || !azimuth_account_banner(text, sizeof(text), &color)) {
         return;
     }
+    /* UTF-8 (the Portuguese line has accents) */
+    static wchar_t wide[200];
+    int got = MultiByteToWideChar(CP_UTF8, 0, text, -1, wide, (int)ARRAY_COUNT(wide));
     size_t n = 0;
-    for (; text[n] && n < ui_status_capacity; ++n) {
-        ui_status_text[n] = (wchar_t)(unsigned char)text[n];
+    for (; got > 0 && wide[n] && n < ui_status_capacity; ++n) {
+        ui_status_text[n] = wide[n];
     }
     for (size_t i = n; i <= ui_status_capacity; ++i) {
         ui_status_text[i] = 0;
@@ -488,6 +491,7 @@ int azimuth_ui_open_infinity(void *page) {
    their size (each language's is different; cz and HU are the same file). */
 static const unsigned ui_message_center_sizes[] = {10516u, 12210u, 12604u, 15664u, 15668u, 15670u, 15906u, 16050u,
                                                    16189u, 16346u, 16372u, 16604u, 16648u, 16982u, 17058u, 17274u};
+#define UI_MESSAGE_CENTER_BR 16604u
 #define UI_STRINGS_MAX 17280u
 #define UI_STRINGS_TEXT 600u
 static char ui_strings_buffer[UI_STRINGS_MAX];
@@ -799,6 +803,8 @@ static void ui_message_center(void *archive, void **out, void *entry, unsigned m
     if (!table) {
         return;
     }
+    /* the game's language: br.zip's table (pt-BR) is the only one of this size */
+    azimuth_lang_set_portuguese(size == UI_MESSAGE_CENTER_BR);
     memory_copy(ui_strings.data, ui_source, (size_t)size);
     ui_strings.length = (unsigned)size;
     if (ui_edit_message_center((unsigned char *)ui_strings.data, ui_strings.length) &&

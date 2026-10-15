@@ -43,15 +43,17 @@ static unsigned update_build(const char *version) {
     return update_build_in(version, text_length(version));
 }
 
+/* Appends `text` (UTF-8, in the game's language: azimuth_tr8) to `out`. */
 static void text_wide(wchar_t *out, size_t cap, const char *text) {
     size_t n = 0;
     while (out[n] && n + 1 < cap) {
         ++n;
     }
-    for (; *text && n + 1 < cap; ++text) {
-        out[n++] = (wchar_t)(unsigned char)*text;
+    text = azimuth_tr8(text);
+    if (n + 1 < cap && text && *text) {
+        int got = MultiByteToWideChar(CP_UTF8, 0, text, -1, out + n, (int)(cap - n));
+        out[got > 0 ? n + (size_t)got - 1 : n] = 0;
     }
-    out[n] = 0;
 }
 
 static void update_say(const char *a, const char *b, const char *c) {
@@ -59,6 +61,11 @@ static void update_say(const char *a, const char *b, const char *c) {
     text_wide(update_text, ARRAY_COUNT(update_text), a);
     text_wide(update_text, ARRAY_COUNT(update_text), b);
     text_wide(update_text, ARRAY_COUNT(update_text), c);
+}
+
+static void update_more(const char *a, const char *b) {
+    text_wide(update_text, ARRAY_COUNT(update_text), a);
+    text_wide(update_text, ARRAY_COUNT(update_text), b);
 }
 
 static void text_add_to(char *out, size_t cap, const char *text) {
@@ -197,8 +204,8 @@ static DWORD WINAPI update_thread(void *unused) {
     (void)unused;
     const char *why = update_download();
     if (!why) {
-        update_say("ForzaInfinity ", update_release, " is installed (" MOD_VERSION " before). Restart the game to "
-                   "use it; your server and settings stay as they are.");
+        update_say("ForzaInfinity ", update_release, " is installed (");
+        update_more(MOD_VERSION, " before). Restart the game to use it; your server and settings stay as they are.");
         InterlockedExchange(&update_state, UPDATE_INSTALLED);
         update_log("installed ", update_latest);
         return 0;
@@ -234,9 +241,9 @@ void azimuth_update_offer(const char *latest, const char *release) {
     }
     update_log("newer version on the server: ", latest);
     if (!tag || !azimuth_net_auto_update()) {
-        update_say("ForzaInfinity ", update_release, " is out (this is " MOD_VERSION ").\n\nClose the game and run "
-                   "ForzaInfinity-Update in the Azimuth folder (next to azimuth.exe): it installs the new version "
-                   "and keeps your server and settings.");
+        update_say("ForzaInfinity ", update_release, " is out (this is ");
+        update_more(MOD_VERSION, ").\n\nClose the game and run ForzaInfinity-Update in the Azimuth folder (next to "
+                                 "azimuth.exe): it installs the new version and keeps your server and settings.");
         InterlockedExchange(&update_state, UPDATE_AVAILABLE);
         return;
     }

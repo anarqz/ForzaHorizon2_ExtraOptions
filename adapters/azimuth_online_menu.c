@@ -192,7 +192,7 @@ static void menu_popup(const wchar_t *title, const wchar_t *message, const MenuB
     if (!popup) {
         return;
     }
-    MenuText *t = menu_text(title), *m = menu_text(message);
+    MenuText *t = menu_text(azimuth_tr(title)), *m = menu_text(azimuth_tr(message));
     if (t) {
         ((MenuPopupTextFn)(uintptr_t)(menu_game + MENU_POPUP_TITLE_RVA))(popup, (void **)&t);
         menu_text_release(t);
@@ -204,7 +204,7 @@ static void menu_popup(const wchar_t *title, const wchar_t *message, const MenuB
     /* the type FUN_140dd8820 would store: 0 one button, 1 two, 7 three */
     *(int *)((unsigned char *)popup + 0x418) = count == 1 ? 0 : count == 2 ? 1 : 7;
     for (int i = 0; i < count; ++i) {
-        MenuText *label = menu_text(buttons[i].label);
+        MenuText *label = menu_text(azimuth_tr(buttons[i].label));
         MenuStdFunction fn = {{0}, 0};
         menu_function(&fn, buttons[i].action);
         if (label) {
@@ -272,8 +272,9 @@ static void menu_descriptor_fire(void *self, void *page, void *text) {
 static void menu_keyboard(const wchar_t *title, const wchar_t *description, int max_length, MenuTextDone done) {
     void *no_default = 0;
     menu_keyboard_done = done;
-    ((MenuKeyboardFn)(uintptr_t)(menu_game + MENU_KEYBOARD_RVA))(menu_page, &no_default, &menu_descriptor, title,
-                                                                 description, 0, 0, max_length, 1);
+    ((MenuKeyboardFn)(uintptr_t)(menu_game + MENU_KEYBOARD_RVA))(menu_page, &no_default, &menu_descriptor,
+                                                                 azimuth_tr(title), azimuth_tr(description), 0, 0,
+                                                                 max_length, 1);
 }
 
 /* --------------------------------------------------------------- text */
@@ -285,6 +286,19 @@ static void line_start(void) {
 }
 
 static void line_add(const wchar_t *text) {
+    size_t n = 0;
+    text = azimuth_tr(text);
+    while (menu_line[n]) {
+        ++n;
+    }
+    while (text && *text && n + 1 < ARRAY_COUNT(menu_line)) {
+        menu_line[n++] = *text++;
+    }
+    menu_line[n] = 0;
+}
+
+/* As line_add, as it is (a version number, a name). */
+static void menu_line_raw(const wchar_t *text) {
     size_t n = 0;
     while (menu_line[n]) {
         ++n;
@@ -313,9 +327,12 @@ static void menu_update(void) {
         menu_info(L"INFINITY UPDATE", azimuth_update_text());
         break;
     default:
-        menu_info(L"INFINITY UPDATE", L"ForzaInfinity " MOD_VERSION_WIDE L" is the newest version this server knows "
-                                      L"of.\n\nWhen a new one comes out it is installed by itself, and the game asks "
-                                      L"you to restart.");
+        line_start();
+        line_add(L"ForzaInfinity ");
+        menu_line_raw(MOD_VERSION_WIDE);
+        line_add(L" is the newest version this server knows of.");
+        line_add(L"\n\nWhen a new one comes out it is installed by itself, and the game asks you to restart.");
+        menu_info(L"INFINITY UPDATE", menu_line);
     }
 }
 
@@ -592,7 +609,7 @@ static InfinityTile menu_tiles[8];
 static MenuAction menu_tile_actions[8];
 
 static void menu_set_tile(int i, const char *heading, const char *icon, int photo, MenuAction action) {
-    menu_tiles[i].heading = heading;
+    menu_tiles[i].heading = azimuth_tr8(heading);
     menu_tiles[i].icon = icon;
     menu_tiles[i].photo = photo;
     menu_tile_actions[i] = action;
@@ -779,10 +796,10 @@ static void actions_add(void *page, void **list, void **item) {
         return; /* offline, no profile, or the player is not on this server */
     }
     actions_xuid = xuid;
-    MenuText *text = menu_text(state == 2   ? L"REMOVE FRIEND"
-                               : state == 1 ? L"CANCEL FRIEND REQUEST"
-                               : state == 3 ? L"ACCEPT FRIEND REQUEST"
-                                            : L"ADD FRIEND");
+    MenuText *text = menu_text(azimuth_tr(state == 2   ? L"REMOVE FRIEND"
+                                          : state == 1 ? L"CANCEL FRIEND REQUEST"
+                                          : state == 3 ? L"ACCEPT FRIEND REQUEST"
+                                                       : L"ADD FRIEND"));
     if (!text) {
         return;
     }

@@ -378,10 +378,10 @@ static void account_error(DWORD status, const char *reply, wchar_t *message, siz
     if (status && json_string(reply, "error", text, sizeof(text)) && text[0]) {
         utf8_to_wide(text, message, cap);
     } else if (!status) {
-        utf8_to_wide("Could not reach the server. Check its address and that it is running.",
+        utf8_to_wide(azimuth_tr8("Could not reach the server. Check its address and that it is running."),
                      message, cap);
     } else {
-        utf8_to_wide("The server refused the request.", message, cap);
+        utf8_to_wide(azimuth_tr8("The server refused the request."), message, cap);
     }
 }
 
@@ -395,13 +395,13 @@ static DWORD WINAPI account_thread(void *unused) {
         azimuth_cloud_start(account_directory, account_xuid, account_token, account_file, account_server);
     } else if (status == 401) {
         /* the profile logged in on another PC (or the server forgot it): this token is dead */
-        utf8_to_wide("The profile ", account_notice, ARRAY_COUNT(account_notice));
+        utf8_to_wide(azimuth_tr8("The profile "), account_notice, ARRAY_COUNT(account_notice));
         size_t n = wide_len(account_notice), g = wide_len(account_gamertag);
         if (n + g + 1 < ARRAY_COUNT(account_notice)) {
             memory_copy(account_notice + n, account_gamertag, (g + 1) * sizeof(wchar_t));
         }
         n = wide_len(account_notice);
-        utf8_to_wide(" was signed in on another PC. To play it here, sign in again with the profile and its site key.",
+        utf8_to_wide(azimuth_tr8(" was signed in on another PC. To play it here, sign in again with the profile and its site key."),
                      account_notice + n, ARRAY_COUNT(account_notice) - n);
         account_token[0] = 0;
         account_write(L"Token", L"");
@@ -458,7 +458,7 @@ int azimuth_account_register(const wchar_t *name, wchar_t *message, size_t cap) 
     static char reply[2048], body[256];
     char ascii[24];
     if (!account_available || !azimuth_account_valid_name(name)) {
-        utf8_to_wide("The name must have 1 to 20 letters or digits and start with a letter.", message, cap);
+        utf8_to_wide(azimuth_tr8("The name must have 1 to 20 letters or digits and start with a letter."), message, cap);
         return 0;
     }
     wide_to_ascii(name, ascii, sizeof(ascii));
@@ -481,8 +481,9 @@ int azimuth_account_register(const wchar_t *name, wchar_t *message, size_t cap) 
         azimuth_net_call(L"POST", L"/infinity/v1/delete", account_token_header(), "{}", reply, sizeof(reply));
         account_token[0] = 0;
         account_log("profile not created, offline save not uploaded: ", why);
-        utf8_to_wide("Your offline progress could not be copied to the server, so the profile was not created. Play "
-                     "until the game saves, check the connection in Test connection, then try again.",
+        utf8_to_wide(azimuth_tr8("Your offline progress could not be copied to the server, so the profile was not "
+                                 "created. Play until the game saves, check the connection in Test connection, then "
+                                 "try again."),
                      message, cap);
         return 0;
     }
@@ -499,7 +500,7 @@ int azimuth_account_register(const wchar_t *name, wchar_t *message, size_t cap) 
 int azimuth_account_delete(wchar_t *message, size_t cap) {
     static char reply[512];
     if (!account_available || !account_token[0]) {
-        utf8_to_wide("There is no online profile on this PC.", message, cap);
+        utf8_to_wide(azimuth_tr8("There is no online profile on this PC."), message, cap);
         return 0;
     }
     DWORD status = azimuth_net_call(L"POST", L"/infinity/v1/delete", account_token_header(), "{}", reply, sizeof(reply));
@@ -529,18 +530,18 @@ int azimuth_account_log_in(const wchar_t *gamertag, const wchar_t *web_key, wcha
     /* Name#12345 and K7QM-4XPA-9RT2: letters, digits, '#' and '-' only (no JSON escaping) */
     for (const char *p = tag; *p; ++p) {
         if (!((*p >= 'A' && *p <= 'Z') || (*p >= 'a' && *p <= 'z') || (*p >= '0' && *p <= '9') || *p == '#')) {
-            utf8_to_wide("Use the format Name#12345.", message, cap);
+            utf8_to_wide(azimuth_tr8("Use the format Name#12345."), message, cap);
             return 0;
         }
     }
     for (const char *p = key; *p; ++p) {
         if (!((*p >= 'A' && *p <= 'Z') || (*p >= 'a' && *p <= 'z') || (*p >= '0' && *p <= '9') || *p == '-')) {
-            utf8_to_wide("A site key has letters, digits and dashes, like K7QM-4XPA-9RT2.", message, cap);
+            utf8_to_wide(azimuth_tr8("A site key has letters, digits and dashes, like K7QM-4XPA-9RT2."), message, cap);
             return 0;
         }
     }
     if (!account_available) {
-        utf8_to_wide("Infinity is not available on this PC.", message, cap);
+        utf8_to_wide(azimuth_tr8("Infinity is not available on this PC."), message, cap);
         return 0;
     }
     body[0] = 0;
@@ -568,6 +569,7 @@ int azimuth_account_log_in(const wchar_t *gamertag, const wchar_t *web_key, wcha
 
 static void report_add(wchar_t *out, size_t cap, const wchar_t *text) {
     size_t n = wide_len(out);
+    text = azimuth_tr(text);
     while (text && *text && n + 1 < cap) {
         out[n++] = *text++;
     }
@@ -624,7 +626,7 @@ void azimuth_account_test(wchar_t *out, size_t cap) {
         report_add(out, cap, account_active ? L": accepted, playing online." : L": accepted (restart to play online).");
     } else {
         json_string(reply, "error", text, sizeof(text));
-        utf8_to_wide(text[0] ? text : "refused.", wide, ARRAY_COUNT(wide));
+        utf8_to_wide(text[0] ? text : azimuth_tr8("refused."), wide, ARRAY_COUNT(wide));
         report_add(out, cap, L"\nProfile: ");
         report_add(out, cap, wide);
     }
@@ -667,25 +669,25 @@ int azimuth_account_banner(char *out, size_t cap, const char **color) {
     LONG link = account_link;
     int update = azimuth_update_state();
     if (update == UPDATE_INSTALLED) {
-        text_add(out, cap, "INFINITY  |  UPDATE INSTALLED  |  RESTART THE GAME");
+        text_add(out, cap, azimuth_tr8("INFINITY  |  UPDATE INSTALLED  |  RESTART THE GAME"));
         *color = "#f5c400";
     } else if (update == UPDATE_AVAILABLE && link != 2) {
-        text_add(out, cap, "INFINITY  |  UPDATE AVAILABLE  |  SEE SETTINGS > INFINITY");
+        text_add(out, cap, azimuth_tr8("INFINITY  |  UPDATE AVAILABLE  |  SEE SETTINGS > INFINITY"));
         *color = "#f5c400";
     } else if (account_active && link != 2) {
         wide_to_ascii(account_gamertag, tag, sizeof(tag));
-        text_add(out, cap, "INFINITY  |  CONNECTED  |  ");
+        text_add(out, cap, azimuth_tr8("INFINITY  |  CONNECTED  |  "));
         text_add(out, cap, tag);
         *color = "#3ddc84";
     } else if (link == 2) {
-        text_add(out, cap, "INFINITY  |  NO CONNECTION TO THE SERVER");
+        text_add(out, cap, azimuth_tr8("INFINITY  |  NO CONNECTION TO THE SERVER"));
         *color = "#ff4f4f";
     } else if (account_token[0]) {
-        text_add(out, cap, "INFINITY  |  ONLINE PROFILE OFF");
+        text_add(out, cap, azimuth_tr8("INFINITY  |  ONLINE PROFILE OFF"));
         *color = "#9a9a9a";
     } else {
-        text_add(out, cap, link == 1 ? "INFINITY  |  SERVER ONLINE  |  CREATE YOUR PROFILE IN SETTINGS"
-                                     : "INFINITY  |  CHECKING THE SERVER...");
+        text_add(out, cap, azimuth_tr8(link == 1 ? "INFINITY  |  SERVER ONLINE  |  CREATE YOUR PROFILE IN SETTINGS"
+                                                 : "INFINITY  |  CHECKING THE SERVER..."));
         *color = link == 1 ? "#f5c400" : "#9a9a9a";
     }
     return 1;
@@ -754,7 +756,7 @@ int azimuth_account_friend_state(unsigned long long xuid) {
 int azimuth_account_friend_change(unsigned long long xuid, int add, wchar_t *message, size_t cap) {
     static char reply[1024], body[64], text[400];
     if (!account_active || !account_token[0]) {
-        utf8_to_wide("Friends need your online profile: create one or sign in in Settings > Infinity.", message, cap);
+        utf8_to_wide(azimuth_tr8("Friends need your online profile: create one or sign in in Settings > Infinity."), message, cap);
         return 0;
     }
     account_xuid_body(xuid, body, sizeof(body));
@@ -775,7 +777,7 @@ int azimuth_account_add_friend(const wchar_t *gamertag, wchar_t *message, size_t
     /* Name#12345 only: letters, digits and one '#' (no JSON escaping needed) */
     for (const char *p = tag; *p; ++p) {
         if (!((*p >= 'A' && *p <= 'Z') || (*p >= 'a' && *p <= 'z') || (*p >= '0' && *p <= '9') || *p == '#')) {
-            utf8_to_wide("Use the format Name#12345.", message, cap);
+            utf8_to_wide(azimuth_tr8("Use the format Name#12345."), message, cap);
             return 0;
         }
     }

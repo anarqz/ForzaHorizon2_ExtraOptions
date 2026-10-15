@@ -71,6 +71,12 @@ const wchar_t *azimuth_account_notice(void);
    3 they asked, 0 neither, -1 unknown; and adding / removing them. */
 int azimuth_account_friend_state(unsigned long long xuid);
 int azimuth_account_friend_change(unsigned long long xuid, int add, wchar_t *message, size_t cap);
+/* azimuth_lang.c: Infinity's texts in Portuguese (Brazil) when the game runs in it, else in
+   English. azimuth_tr / azimuth_tr8 look a text up by its English. */
+void azimuth_lang_set_portuguese(int on);
+int azimuth_lang_portuguese(void);
+const wchar_t *azimuth_tr(const wchar_t *english);
+const char *azimuth_tr8(const char *english);
 /* azimuth_update.c: the self-update, offered the server's latestHook / latestRelease. */
 enum { UPDATE_NONE, UPDATE_AVAILABLE, UPDATE_DOWNLOADING, UPDATE_INSTALLED };
 void azimuth_update_offer(const char *latest, const char *release);

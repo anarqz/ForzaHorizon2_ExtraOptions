@@ -967,6 +967,24 @@ int azimuth_net_auto_update(void) {
 static DWORD net_request(const wchar_t *method, const wchar_t *path, const wchar_t *headers,
                          const wchar_t *content_type, const void *body, size_t body_size, void *out,
                          size_t capacity, size_t *received, int timeout_ms) {
+    /* the game's language, for the server's messages (X-Fh2-Lang: pt-BR; English otherwise) */
+    wchar_t joined[512];
+    if (azimuth_lang_portuguese()) {
+        static const wchar_t lang[] = L"X-Fh2-Lang: pt-BR";
+        size_t n = 0;
+        while (headers && headers[n] && n + 3 + ARRAY_COUNT(lang) < ARRAY_COUNT(joined)) {
+            joined[n] = headers[n];
+            ++n;
+        }
+        if (!headers || !headers[n]) {
+            if (n) {
+                joined[n++] = L'\r';
+                joined[n++] = L'\n';
+            }
+            memory_copy(joined + n, lang, sizeof(lang));
+            headers = joined;
+        }
+    }
     return net_request_at(net_server_host, net_server_port, net_server_secure, method, path, headers, content_type,
                           body, body_size, out, capacity, received, timeout_ms);
 }
