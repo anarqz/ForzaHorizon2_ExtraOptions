@@ -103,6 +103,7 @@ def build(compiler, output, directory, options):
             "adapters/azimuth_host.c",
             "adapters/azimuth_livery.c",
             "adapters/azimuth_save.c",
+            "adapters/azimuth_offsets.c",
             "adapters/azimuth_net.c",
             "adapters/azimuth_pad.c",
             "adapters/azimuth_account.c",

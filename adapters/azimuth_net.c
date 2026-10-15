@@ -17,15 +17,14 @@
 #include "azimuth_host.h"
 #include "logging.h"
 #include "sha256.h"
+#include "azimuth_offsets.h"
 #include "support.h"
 #include <stddef.h>
 #include <winhttp.h>
 
 #define NET_CLSCTX_INPROC_SERVER 0x1u
-#define NET_HOOK_RVA 0x6dbe0u
 #define NET_HOOK_HASHED_BYTES 0x20u
 #define NET_HOOK_JUMP_BYTES 14u
-#define NET_MMDEVICE_FACTORY_RVA 0x144400u
 #define NET_OFFLINE_ERROR ((HRESULT)0x800C0005L) /* INET_E_RESOURCE_NOT_FOUND */
 #define NET_HEADER_NOT_FOUND ((HRESULT)0x80072F76L)
 #define NET_UNEXPECTED ((HRESULT)0x8000FFFFL)
@@ -47,10 +46,8 @@ static const unsigned char net_iid_agile[16] = {0x94, 0x2b, 0xea, 0x94, 0xcc, 0x
 static const unsigned char net_iid_sequential_stream[16] = {0x30, 0x3a, 0x73, 0x0c, 0x1c, 0x2a,
                                                             0xce, 0x11, 0xad, 0xe5, 0x00, 0xaa,
                                                             0x00, 0x44, 0x77, 0x3d};
-/* SHA-256 of Azimuth 0.9.7's first 0x20 bytes at RVA 0x6dbe0. */
-static const unsigned char net_hook_original_hash[32] = {
-    0xbd, 0xac, 0x04, 0x38, 0x9c, 0x8f, 0x5f, 0x0c, 0x9e, 0xe6, 0xc8, 0x04, 0xc9, 0xb5, 0x62, 0x9a,
-    0xb0, 0xd4, 0xd7, 0xd4, 0x32, 0xff, 0xc2, 0xed, 0x04, 0x2d, 0x18, 0xdc, 0x79, 0x83, 0xcb, 0xec};
+/* Where to hook this Azimuth build (azimuth_offsets.c); 0 on a build FH2Online was not made for. */
+static const AzimuthOffsets *net_offsets;
 
 enum { NET_MODE_OFF, NET_MODE_CAPTURE, NET_MODE_PROXY };
 
@@ -1252,7 +1249,7 @@ static HRESULT net_co_create_instance(REFCLSID clsid, void *outer, DWORD context
         net_log_once(&net_seen_mmdevice,
                      "NETWORK: CoCreateInstance reached the hook (MMDeviceEnumerator -> Azimuth).\r\n");
         MmDeviceFactoryFn factory =
-            (MmDeviceFactoryFn)(uintptr_t)(net_azimuth_base + NET_MMDEVICE_FACTORY_RVA);
+            (MmDeviceFactoryFn)(uintptr_t)(net_azimuth_base + net_offsets->net_mmdevice_factory);
         return factory(iid, out);
     }
     net_log_guid("NETWORK: refused CoCreateInstance for unknown CLSID ", (const unsigned char *)clsid);
@@ -1267,8 +1264,8 @@ static int net_install_hook(unsigned char *base) {
     for (unsigned i = 0; i < 8; ++i) {
         jump[6 + i] = (unsigned char)(target >> (8 * i));
     }
-    if (azimuth_host_build(base) != AZIMUTH_097 ||
-        !memory_read(base + NET_HOOK_RVA, current, sizeof(current))) {
+    net_offsets = azimuth_offsets(base);
+    if (!net_offsets || !memory_read(base + net_offsets->net_hook, current, sizeof(current))) {
         return 0;
     }
     if (memory_equal(current, jump, sizeof(jump))) {
@@ -1278,17 +1275,17 @@ static int net_install_hook(unsigned char *base) {
     sha256_initialize(&hash);
     sha256_update(&hash, current, sizeof(current));
     sha256_finalize(&hash, digest);
-    if (!memory_equal(digest, net_hook_original_hash, sizeof(digest))) {
+    if (!memory_equal(digest, net_offsets->net_hook_hash, sizeof(digest))) {
         return 0;
     }
+    unsigned char *at = base + net_offsets->net_hook;
     DWORD old_protection, ignored;
-    if (!VirtualProtect(base + NET_HOOK_RVA, sizeof(jump), PAGE_EXECUTE_READWRITE,
-                        &old_protection)) {
+    if (!VirtualProtect(at, sizeof(jump), PAGE_EXECUTE_READWRITE, &old_protection)) {
         return -1;
     }
-    memory_copy(base + NET_HOOK_RVA, jump, sizeof(jump));
-    FlushInstructionCache(GetCurrentProcess(), base + NET_HOOK_RVA, sizeof(jump));
-    VirtualProtect(base + NET_HOOK_RVA, sizeof(jump), old_protection, &ignored);
+    memory_copy(at, jump, sizeof(jump));
+    FlushInstructionCache(GetCurrentProcess(), at, sizeof(jump));
+    VirtualProtect(at, sizeof(jump), old_protection, &ignored);
     return 1;
 }
 
@@ -1351,22 +1348,12 @@ static void net_read_settings(const wchar_t *directory) {
    (Azimuth's vccorlib110!GetActivationFactoryByPCWSTR) and whether it asks
    User for an Xbox Live token. Written to FH2_ExtraOptions.log. */
 
-#define NET_ACTIVATION_RVA 0x6da50u
 #define NET_TRACE_MAX_LINES 400
-static const unsigned char net_activation_hash[32] = {
-    0x1d, 0x9b, 0x52, 0xa3, 0x5e, 0x58, 0x70, 0xbb, 0xb1, 0x29, 0x6b, 0x5c, 0x28, 0xb2, 0x0d, 0xa8,
-    0x48, 0xb3, 0x6a, 0xd7, 0xbb, 0x64, 0x7b, 0x24, 0x1b, 0x4f, 0xb4, 0xfc, 0x70, 0xbd, 0x96, 0x0f};
-/* The providers FUN_14006da50 asks in order; REGDB_E_CLASSNOTREG means "next". */
-static const unsigned net_activation_providers[7] = {0x143020u, 0x2cf50u, 0x1431e0u, 0x93bd0u,
-                                                     0x144250u, 0x1454b0u, 0x14a310u};
+/* The activation (0.9.7: FUN_14006da50) asks its providers (net_offsets) in order;
+   REGDB_E_CLASSNOTREG means "next". */
 typedef HRESULT (*NetActivationProvider)(const wchar_t *, const void *, void **);
 
-/* User.GetTokenAndSignature* slots of the two User vtables (.rdata RVAs) and
-   the Azimuth functions they hold. */
-static const unsigned net_token_slots[6] = {0x24ff90u, 0x24ff98u, 0x24ffa0u,
-                                            0x250290u, 0x250298u, 0x2502a0u};
-static const unsigned net_token_targets[6] = {0x239b0u, 0x239d0u, 0x23a20u,
-                                              0x23ee0u, 0x23f00u, 0x23f50u};
+/* User.GetTokenAndSignature*: six slots of the two User vtables (net_offsets). */
 typedef HRESULT (*NetTokenFn)(void *, void *, void *, void *, void *, void *, void *, void *);
 static NetTokenFn net_token_original[6];
 
@@ -1408,9 +1395,9 @@ static HRESULT net_activate_raw(const wchar_t *name, const void *iid, void **out
     HRESULT result = REGDB_E_CLASSNOTREG;
     unsigned provider = 0;
     *out = 0;
-    for (; provider < ARRAY_COUNT(net_activation_providers); ++provider) {
+    for (; provider < ARRAY_COUNT(net_offsets->net_activation_providers); ++provider) {
         NetActivationProvider call = (NetActivationProvider)(uintptr_t)(
-            net_azimuth_base + net_activation_providers[provider]);
+            net_azimuth_base + net_offsets->net_activation_providers[provider]);
         result = call(name, iid, out);
         if (result != REGDB_E_CLASSNOTREG) {
             break;
@@ -2194,7 +2181,6 @@ static const unsigned char net_iid_data_reader[16] = {0x29, 0x00, 0xb5, 0xe2, 0x
 static const unsigned char net_iid_data_reader_statics[16] = {0xc8, 0xbf, 0xfc, 0x11, 0x3a, 0xf9,
                                                               0x1b, 0x47, 0xb1, 0x21, 0xf3, 0x79,
                                                               0xe3, 0x49, 0x31, 0x3c};
-#define NET_HSTRING_CREATE_RVA 0x86110u
 typedef HRESULT (*NetHstringCreateFn)(const wchar_t *, unsigned, void **);
 
 static int net_reader_state; /* 0 untested, 1 Azimuth's works, 2 replaced */
@@ -2500,7 +2486,7 @@ static HRESULT STDMETHODCALLTYPE net_reader_string(NetReader *self, UINT32 count
         return result;
     }
     NetHstringCreateFn create =
-        (NetHstringCreateFn)(uintptr_t)(net_azimuth_base + NET_HSTRING_CREATE_RVA);
+        (NetHstringCreateFn)(uintptr_t)(net_azimuth_base + net_offsets->hstring_create);
     if (!count) {
         return create(L"", 0, out);
     }
@@ -3052,7 +3038,6 @@ static void net_trace_token(unsigned slot, void *method, void *url) {
    IAsyncOperation<GetTokenAndSignatureResult>. The result's two string getters
    return distinguishable values so a capture shows which one is the token. */
 
-#define NET_CREATE_STRING_RVA 0x86110u
 typedef HRESULT (*NetCreateStringFn)(const wchar_t *, unsigned, void **);
 
 static const unsigned char net_iid_async_info[16] = {0x36, 0, 0, 0, 0, 0, 0, 0,
@@ -3152,7 +3137,7 @@ static HRESULT net_make_hstring(const wchar_t *text, void **out) {
     if (!out) {
         return E_POINTER;
     }
-    NetCreateStringFn create = (NetCreateStringFn)(uintptr_t)(net_azimuth_base + NET_CREATE_STRING_RVA);
+    NetCreateStringFn create = (NetCreateStringFn)(uintptr_t)(net_azimuth_base + net_offsets->hstring_create);
     return create(text, (unsigned)wide_length(text), out);
 }
 static HRESULT STDMETHODCALLTYPE net_result_get_0(NetTokenResult *self, void **out) {
@@ -3406,15 +3391,15 @@ static int net_write_jump(unsigned char *at, const void *target, const unsigned 
 }
 
 static void net_install_trace(void) {
-    int activation = net_write_jump(net_azimuth_base + NET_ACTIVATION_RVA,
+    int activation = net_write_jump(net_azimuth_base + net_offsets->net_activation,
                                     (const void *)net_get_activation_factory,
-                                    net_activation_hash, 0x20);
+                                    net_offsets->net_activation_hash, 0x20);
     log_append(activation > 0 ? "WINRT: activation trace installed.\r\n"
                               : "WINRT: activation trace NOT installed (unexpected bytes).\r\n");
     unsigned patched = 0;
-    for (unsigned i = 0; i < ARRAY_COUNT(net_token_slots); ++i) {
-        void **slot = (void **)(net_azimuth_base + net_token_slots[i]);
-        void *expected = net_azimuth_base + net_token_targets[i], *current = 0;
+    for (unsigned i = 0; i < ARRAY_COUNT(net_offsets->net_token_slots); ++i) {
+        void **slot = (void **)(net_azimuth_base + net_offsets->net_token_slots[i]);
+        void *expected = net_azimuth_base + net_offsets->net_token_targets[i], *current = 0;
         DWORD old_protection, ignored;
         if (!memory_read(slot, &current, sizeof(current)) || current != expected ||
             !VirtualProtect(slot, sizeof(*slot), PAGE_READWRITE, &old_protection)) {
@@ -3425,7 +3410,7 @@ static void net_install_trace(void) {
         VirtualProtect(slot, sizeof(*slot), old_protection, &ignored);
         ++patched;
     }
-    log_append(patched == ARRAY_COUNT(net_token_slots)
+    log_append(patched == ARRAY_COUNT(net_offsets->net_token_slots)
                    ? "XBL: fake token installed on all 6 User slots.\r\n"
                    : "XBL: fake token installed on only some User slots.\r\n");
 }
@@ -3721,6 +3706,9 @@ void azimuth_apply_network(const wchar_t *directory) {
     net_azimuth_base = (unsigned char *)GetModuleHandleW(NULL);
     int result = net_install_hook(net_azimuth_base);
     if (result > 0) {
+        log_append("NETWORK: Azimuth ");
+        log_append(net_offsets->name);
+        log_append(".\r\n");
         net_install_trace();
         log_append(net_mode == NET_MODE_PROXY
                        ? "NETWORK: HTTP hook installed; requests are captured to "
@@ -3732,6 +3720,7 @@ void azimuth_apply_network(const wchar_t *directory) {
         log_append("NETWORK: HTTP hook could not be written; network layer disabled.\r\n");
     } else {
         net_mode = NET_MODE_OFF;
-        log_append("NETWORK: skipped; host is not the inspected Azimuth 0.9.7 build.\r\n");
+        log_append("NETWORK: skipped; FH2Online supports Azimuth 0.9.7 and 0.9.9, not this build "
+                   "(the game plays offline).\r\n");
     }
 }

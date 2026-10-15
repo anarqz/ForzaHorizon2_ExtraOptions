@@ -9,7 +9,7 @@
    starts in the online profile). The network layer sends X-Fh2-Token on every request.
 
    When the game starts online, it sees the account through Azimuth's LocalUser:
-   - XboxUserId (vtable slot 0x24ff88, Azimuth formats a fixed 0x9000000000000) returns the
+   - XboxUserId (0.9.7: vtable slot 0x24ff88; every build in azimuth_offsets.c; Azimuth formats a fixed 0x9000000000000) returns the
      account XUID; Azimuth then keeps a separate save (User_<xuid>), so the online profile
      starts from zero and the offline save is left alone;
    - the gamertag / display names (LocalDisplayInfo slots 0x24ffe8, 0x24fff8, 0x250000) are
@@ -22,15 +22,12 @@
    site key; the server issues a new token and the PC that had the profile is logged out (its
    next start finds the token refused, forgets it and says so in the menu). */
 #include "azimuth_host.h"
+#include "azimuth_offsets.h"
 #include "logging.h"
 #include "sha256.h"
 #include "support.h"
 
 #define ACCOUNT_FILE L"FH2Online_Accounts.ini"
-#define ACCOUNT_NAME_RVA 0x318c60u
-#define ACCOUNT_XUID_SLOT 0x24ff88u
-#define ACCOUNT_XUID_TARGET 0x23820u
-#define ACCOUNT_HSTRING_CREATE_RVA 0x86110u
 #define ACCOUNT_WAIT_MS 30000u
 
 typedef HRESULT (*AccountGetterFn)(void *, void **);
@@ -43,8 +40,8 @@ typedef void(WINAPI *SleepFn)(DWORD);
 typedef BOOL(WINAPI *CreateProcessWFn)(LPCWSTR, LPWSTR, void *, void *, BOOL, DWORD, void *, LPCWSTR,
                                        STARTUPINFOW *, PROCESS_INFORMATION *);
 
-static const unsigned account_info_slots[3] = {0x24ffe8u, 0x24fff8u, 0x250000u};
-static const unsigned account_info_targets[3] = {0x233d0u, 0x234c0u, 0x234d0u};
+/* The getters' slots and the player-name string for this Azimuth build (azimuth_offsets.c). */
+static const AzimuthOffsets *account_offsets;
 static AccountGetterFn account_info_original[3];
 static AccountGetterFn account_xuid_original;
 
@@ -259,7 +256,7 @@ static void account_save(void) {
 /* Rewrites Azimuth's player-name std::wstring (ptr/inline buffer, size +0x10, capacity
    +0x18) in place; the gamertag fits whenever "Player 1"-style names already did. */
 static int account_set_player_name(void) {
-    unsigned char *string = account_host + ACCOUNT_NAME_RVA;
+    unsigned char *string = account_host + account_offsets->account_name;
     unsigned long long capacity = 0;
     size_t length = wide_len(account_gamertag);
     if (!memory_read(string + 0x18, &capacity, 8) || capacity < length || capacity > 4096) {
@@ -285,7 +282,7 @@ static HRESULT account_get_xuid(void *self, void **out) {
     if (!account_active || !out) {
         return account_xuid_original(self, out);
     }
-    AccountHstringCreateFn create = (AccountHstringCreateFn)(uintptr_t)(account_host + ACCOUNT_HSTRING_CREATE_RVA);
+    AccountHstringCreateFn create = (AccountHstringCreateFn)(uintptr_t)(account_host + account_offsets->hstring_create);
     return create(account_xuid, (unsigned)wide_len(account_xuid), out);
 }
 
@@ -297,7 +294,7 @@ static HRESULT account_get_name(int slot, void *self, void **out) {
     if (!account_active || !out) {
         return account_info_original[slot](self, out);
     }
-    AccountHstringCreateFn create = (AccountHstringCreateFn)(uintptr_t)(account_host + ACCOUNT_HSTRING_CREATE_RVA);
+    AccountHstringCreateFn create = (AccountHstringCreateFn)(uintptr_t)(account_host + account_offsets->hstring_create);
     return create(account_gamertag, (unsigned)wide_len(account_gamertag), out);
 }
 static HRESULT account_get_info_0(void *self, void **out) {
@@ -742,7 +739,8 @@ void azimuth_apply_account(const wchar_t *directory) {
     HMODULE kernel = GetModuleHandleW(L"kernel32.dll");
     account_sleep = kernel ? (SleepFn)(uintptr_t)GetProcAddress(kernel, "Sleep") : 0;
     size_t n = wide_len(directory);
-    if (!account_sleep || azimuth_host_build(account_host) != AZIMUTH_097 || n >= PATH_CAPACITY ||
+    account_offsets = azimuth_offsets(account_host);
+    if (!account_sleep || !account_offsets || n >= PATH_CAPACITY ||
         !path_join(account_file, directory, ACCOUNT_FILE)) {
         log_append("ACCOUNT: unsupported host or paths; FH2Online accounts unavailable.\r\n");
         return;
@@ -774,10 +772,11 @@ void azimuth_apply_account(const wchar_t *directory) {
         log_append("ACCOUNT: account kept but Online=0; playing the offline profile.\r\n");
         return;
     }
-    int patched = account_patch_slot(ACCOUNT_XUID_SLOT, ACCOUNT_XUID_TARGET, account_get_xuid, &account_xuid_original);
+    int patched = account_patch_slot(account_offsets->account_xuid_slot, account_offsets->account_xuid_target,
+                                     account_get_xuid, &account_xuid_original);
     for (unsigned i = 0; i < 3; ++i) {
-        patched += account_patch_slot(account_info_slots[i], account_info_targets[i], account_info_hooks[i],
-                                      &account_info_original[i]);
+        patched += account_patch_slot(account_offsets->account_info_slots[i], account_offsets->account_info_targets[i],
+                                      account_info_hooks[i], &account_info_original[i]);
     }
     if (patched != 4) {
         log_append("ACCOUNT: LocalUser getters not where expected; playing the offline profile.\r\n");
