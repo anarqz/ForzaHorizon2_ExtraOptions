@@ -578,7 +578,7 @@ static void menu_world_status(void) {
     line_add(L"\n\nSettings (name, password, players, friends only): ");
     menu_line_raw(azimuth_world_config_path());
     line_add(L"\nThey apply the next time you open the world.");
-    static const MenuButton buttons[2] = {{L"Close world", menu_world_stop}, {L"OK", menu_nothing}};
+    static const MenuButton buttons[2] = {{L"OK", menu_nothing}, {L"Close world", menu_world_stop}};
     menu_popup(L"HOST WORLD", menu_line, buttons, 2);
 }
 
