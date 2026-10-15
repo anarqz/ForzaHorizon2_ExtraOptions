@@ -94,7 +94,7 @@ int azimuth_account_banner(char *out, size_t cap, const char **color);
 HRESULT azimuth_net_make_hstring(const wchar_t *text, void **out);
 /* azimuth_freeroam.c: free roam online ([FreeRoam] Enabled=1). The filter may wrap a WinRT
    class's statics that Azimuth answered; it returns 1 if it did. */
-void azimuth_apply_freeroam(unsigned char *game_image, const wchar_t *directory);
+void azimuth_apply_freeroam(unsigned char *game_image, const wchar_t *directory, const wchar_t *executable);
 int azimuth_freeroam_filter(const wchar_t *name, const void *iid, void **out);
 /* azimuth_world.c: the world this player hosts (HOSPEDAR MUNDO). */
 void azimuth_world_set_directory(const wchar_t *directory);
@@ -104,6 +104,9 @@ const wchar_t *azimuth_world_config_path(void);
 int azimuth_world_start(const wchar_t **why);
 int azimuth_world_listed(void);
 void azimuth_world_left(void);
+/* The SHA-256 of the game's car database (X-Fh2-CarDb), hashed on a thread at start. */
+void azimuth_world_hash_car_db(const wchar_t *executable);
+const wchar_t *azimuth_world_car_db_header(void);
 /* The world a player is in (1, 0 none, -1 no answer), and choosing it for the next FREE ROAM
    ONLINE (ENTRAR NO MUNDO). */
 int azimuth_world_of(unsigned long long xuid, char *host, size_t host_capacity, int *password, char *why,

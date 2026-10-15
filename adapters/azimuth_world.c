@@ -20,6 +20,7 @@
    "Close world", or the relay ending, stops it (DELETE /infinity/v1/worlds). */
 #include "azimuth_host.h"
 #include "logging.h"
+#include "sha256.h"
 #include "support.h"
 
 #define WORLD_CFG_NAME L"server.cfg"
@@ -625,6 +626,88 @@ void azimuth_world_on_request(const wchar_t *method, const wchar_t *url, const u
     const wchar_t *why = L"";
     log_append(world_open(0, &why) ? "WORLD: private free roam session: this PC hosts it (unlisted).\r\n"
                                    : "WORLD: private free roam session, but the world did not open.\r\n");
+}
+
+/* ------------------------------------------------------------ the car database */
+/* Players only meet with the same cars installed (imported FM5 cars are rows in it): the
+   SHA-256 of the game's media\stripped\gamedbRC.slt goes with every request to the server
+   (X-Fh2-CarDb, azimuth_net.c) and the server keeps worlds apart by it. Hashed once, on a
+   thread of its own, when the game starts. */
+
+#define WORLD_CAR_DB L"media\\stripped\\gamedbRC.slt"
+#define WORLD_HASH_CHUNK 65536u
+
+static wchar_t world_car_db_path[PATH_CAPACITY];
+static wchar_t world_car_db_header[96];
+static volatile LONG world_car_db_ready;
+
+static DWORD WINAPI world_hash_car_db(void *unused) {
+    (void)unused;
+    unsigned char *chunk = HeapAlloc(GetProcessHeap(), 0, WORLD_HASH_CHUNK);
+    HANDLE file = CreateFileW(world_car_db_path, GENERIC_READ, FILE_SHARE_READ, 0, OPEN_EXISTING,
+                              FILE_ATTRIBUTE_NORMAL, 0);
+    if (!chunk || file == INVALID_HANDLE_VALUE) {
+        log_append("WORLD: the car database could not be read; worlds will not check it.\r\n");
+        if (chunk) HeapFree(GetProcessHeap(), 0, chunk);
+        if (file != INVALID_HANDLE_VALUE) CloseHandle(file);
+        return 0;
+    }
+    Sha256Context hash;
+    unsigned char digest[32];
+    DWORD got = 0;
+    sha256_initialize(&hash);
+    while (ReadFile(file, chunk, WORLD_HASH_CHUNK, &got, 0) && got) {
+        sha256_update(&hash, chunk, got);
+    }
+    CloseHandle(file);
+    HeapFree(GetProcessHeap(), 0, chunk);
+    sha256_finalize(&hash, digest);
+    static const wchar_t prefix[] = L"X-Fh2-CarDb: ";
+    static const char hex[] = "0123456789abcdef";
+    size_t n = 0;
+    for (size_t i = 0; prefix[i]; ++i) world_car_db_header[n++] = prefix[i];
+    for (int i = 0; i < 32; ++i) {
+        world_car_db_header[n++] = (wchar_t)hex[digest[i] >> 4];
+        world_car_db_header[n++] = (wchar_t)hex[digest[i] & 15];
+    }
+    world_car_db_header[n] = 0;
+    InterlockedExchange(&world_car_db_ready, 1);
+    char line[96];
+    WorldText t = {line, 0, sizeof(line)};
+    line[0] = 0;
+    world_add(&t, "WORLD: car database ");
+    for (int i = 0; i < 8; ++i) {
+        char pair[3] = {hex[digest[i] >> 4], hex[digest[i] & 15], 0};
+        world_add(&t, pair);
+    }
+    world_add(&t, "... (worlds only with the same cars).\r\n");
+    log_append(line);
+    return 0;
+}
+
+/* `executable` is the game's forza_durango_release_final.exe in its Mount folder. */
+void azimuth_world_hash_car_db(const wchar_t *executable) {
+    size_t n = 0, slash = 0;
+    while (executable && executable[n] && n + 1 < ARRAY_COUNT(world_car_db_path)) {
+        world_car_db_path[n] = executable[n];
+        if (executable[n] == L'\\' || executable[n] == L'/') slash = n + 1;
+        ++n;
+    }
+    world_car_db_path[slash] = 0;
+    static const wchar_t rest[] = WORLD_CAR_DB;
+    if (slash + ARRAY_COUNT(rest) >= ARRAY_COUNT(world_car_db_path)) {
+        return;
+    }
+    memory_copy(world_car_db_path + slash, rest, sizeof(rest));
+    HANDLE thread = CreateThread(0, 0, world_hash_car_db, 0, 0, 0);
+    if (thread) {
+        CloseHandle(thread);
+    }
+}
+
+/* "X-Fh2-CarDb: <sha-256>", or 0 until it is known. */
+const wchar_t *azimuth_world_car_db_header(void) {
+    return world_car_db_ready ? world_car_db_header : 0;
 }
 
 /* ------------------------------------------------------------ joining a world */

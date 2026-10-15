@@ -41,6 +41,9 @@ void azimuth_world_set_directory(const wchar_t *directory) {
 }
 void azimuth_world_left(void) {
 }
+void azimuth_world_hash_car_db(const wchar_t *executable) {
+    (void)executable;
+}
 
 /* Azimuth's HSTRING layout, as fr_hstring reads it. */
 typedef struct {

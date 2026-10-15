@@ -938,6 +938,15 @@ static void actions_world(void) {
         menu_info(L"JOIN WORLD", L"This player is not in a world anymore.");
         return;
     }
+    if (why[0] == 'c') {
+        line_start();
+        line_add(L"Your car database is different from the one of ");
+        MultiByteToWideChar(CP_UTF8, 0, host, -1, text, (int)ARRAY_COUNT(text));
+        menu_line_raw(text);
+        line_add(L": different cars installed (imported or modified) keep you from playing together.");
+        menu_info(L"JOIN WORLD", menu_line);
+        return;
+    }
     if (why[0]) {
         menu_info(L"JOIN WORLD", why[0] == 'f' && why[1] == 'u'   ? L"The world is full."
                                  : why[0] == 'f'                  ? L"Only the host's friends can join this world."

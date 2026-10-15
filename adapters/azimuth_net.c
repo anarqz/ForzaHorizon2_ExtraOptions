@@ -770,6 +770,11 @@ static int net_forward(NetRequest *request, HRESULT *error) {
                   !buffer_append_wide(&headers, token) || !buffer_append_wide(&headers, L"\r\n"))) {
         goto done;
     }
+    /* the car database's SHA-256: free roam worlds only join the same cars (azimuth_world.c) */
+    const wchar_t *car_db = azimuth_world_car_db_header();
+    if (car_db && (!buffer_append_wide(&headers, car_db) || !buffer_append_wide(&headers, L"\r\n"))) {
+        goto done;
+    }
     session = http_open(L"FH2Online/1", WINHTTP_ACCESS_TYPE_NO_PROXY, WINHTTP_NO_PROXY_NAME,
                         WINHTTP_NO_PROXY_BYPASS, 0);
     if (!session) {
@@ -967,21 +972,37 @@ int azimuth_net_auto_update(void) {
 static DWORD net_request(const wchar_t *method, const wchar_t *path, const wchar_t *headers,
                          const wchar_t *content_type, const void *body, size_t body_size, void *out,
                          size_t capacity, size_t *received, int timeout_ms) {
-    /* the game's language, for the server's messages (X-Fh2-Lang: pt-BR; English otherwise) */
-    wchar_t joined[512];
-    if (azimuth_lang_portuguese()) {
-        static const wchar_t lang[] = L"X-Fh2-Lang: pt-BR";
+    /* the game's language, for the server's messages (X-Fh2-Lang: pt-BR; English otherwise),
+       and the car database's SHA-256 (free roam worlds, azimuth_world.c) */
+    wchar_t joined[640];
+    static const wchar_t lang[] = L"X-Fh2-Lang: pt-BR";
+    const wchar_t *extras[2] = {azimuth_lang_portuguese() ? lang : 0, azimuth_world_car_db_header()};
+    if (extras[0] || extras[1]) {
         size_t n = 0;
-        while (headers && headers[n] && n + 3 + ARRAY_COUNT(lang) < ARRAY_COUNT(joined)) {
+        int fits = 1;
+        while (headers && headers[n] && n + 1 < ARRAY_COUNT(joined)) {
             joined[n] = headers[n];
             ++n;
         }
-        if (!headers || !headers[n]) {
+        fits = !headers || !headers[n];
+        for (int e = 0; e < 2 && fits; ++e) {
+            if (!extras[e]) {
+                continue;
+            }
+            size_t length = wide_length(extras[e]);
+            if (n + 2 + length + 1 > ARRAY_COUNT(joined)) {
+                fits = 0;
+                break;
+            }
             if (n) {
                 joined[n++] = L'\r';
                 joined[n++] = L'\n';
             }
-            memory_copy(joined + n, lang, sizeof(lang));
+            memory_copy(joined + n, extras[e], length * sizeof(wchar_t));
+            n += length;
+        }
+        if (fits) {
+            joined[n] = 0;
             headers = joined;
         }
     }

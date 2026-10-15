@@ -1238,7 +1238,7 @@ static void fr_apply_patches(void) {
 
 /* ------------------------------------------------------------------ setup */
 
-void azimuth_apply_freeroam(unsigned char *game_image, const wchar_t *directory) {
+void azimuth_apply_freeroam(unsigned char *game_image, const wchar_t *directory, const wchar_t *executable) {
     static wchar_t ini[PATH_CAPACITY];
     wchar_t value[16];
     if (!path_join(ini, directory, MOD_INI_NAME)) {
@@ -1257,6 +1257,7 @@ void azimuth_apply_freeroam(unsigned char *game_image, const wchar_t *directory)
     }
     fr_game = game_image;
     azimuth_world_set_directory(directory);
+    azimuth_world_hash_car_db(executable);
     GetPrivateProfileStringW(L"FreeRoam", L"World", L"", fr_world_override,
                              ARRAY_COUNT(fr_world_override), ini);
     fr_base64_encode("fh2inf:local", fr_local_base64, ARRAY_COUNT(fr_local_base64));
