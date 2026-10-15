@@ -703,22 +703,6 @@ static void ui_replace_flow(void **out, void *stream, unsigned size, const char 
 
 static void ui_replace(void **out, void *stream) {
     long long size = ((UiRemainingFn)ui_slot(stream, 0x50))(stream);
-    if (ui_is_message_center(size)) {
-        unsigned changed;
-        if (!ui_read(stream, (unsigned)size, "LSB2")) {
-            ui_rewind(stream);
-            return;
-        }
-        memory_copy(ui_strings.data, ui_source, (size_t)size);
-        ui_strings.length = (unsigned)size;
-        changed = ui_edit_message_center((unsigned char *)ui_strings.data, ui_strings.length);
-        if (!changed || !ui_serve(out, stream, &ui_strings)) {
-            ui_rewind(stream);
-        } else if (InterlockedIncrement(&ui_logged_strings) <= 3) {
-            log_append("UI: Message Center texts name INFINITY as the sender.\r\n");
-        }
-        return;
-    }
     if (size == UI_SCREENS_SIZE && !ui_screens_failed) {
         ui_replace_flow(out, stream, UI_SCREENS_SIZE, "<state id=\"show_my_profile\">", ui_screens_edits,
                         ARRAY_COUNT(ui_screens_edits) / 2, &ui_screens, &ui_screens_failed, "ui_screens.xml");
@@ -799,6 +783,30 @@ static void ui_replace(void **out, void *stream) {
     }
 }
 
+/* A Message Center table: other game files share its sizes (car models, animations and shaders,
+   compressed in the car zips), so the game's stream is never read to tell: the entry is opened
+   a second time, that copy is read and dropped, and the game's stream is replaced only when it
+   is the table. */
+static void ui_message_center(void *archive, void **out, void *entry, unsigned mode, void *stream, long long size) {
+    void *probe = 0;
+    ui_zip_open_original(archive, &probe, entry, mode);
+    if (!probe) {
+        return;
+    }
+    int table = ((UiRemainingFn)ui_slot(probe, 0x50))(probe) == size && ui_read(probe, (unsigned)size, "LSB2") &&
+                memory_equal(ui_source, "LSB2", 4);
+    ((UiRefFn)ui_slot(probe, 0x18))(probe);
+    if (!table) {
+        return;
+    }
+    memory_copy(ui_strings.data, ui_source, (size_t)size);
+    ui_strings.length = (unsigned)size;
+    if (ui_edit_message_center((unsigned char *)ui_strings.data, ui_strings.length) &&
+        ui_serve(out, stream, &ui_strings) && InterlockedIncrement(&ui_logged_strings) <= 3) {
+        log_append("UI: Message Center texts name INFINITY as the sender.\r\n");
+    }
+}
+
 static void **ui_zip_open(void *archive, void **out, void *entry, unsigned mode) {
     void **result = ui_zip_open_original(archive, out, entry, mode);
     void *stream = out ? *out : 0;
@@ -806,7 +814,12 @@ static void **ui_zip_open(void *archive, void **out, void *entry, unsigned mode)
     if (!stream || InterlockedCompareExchange(&ui_busy, 1, 0)) {
         return result;
     }
-    ui_replace(out, stream);
+    long long size = ((UiRemainingFn)ui_slot(stream, 0x50))(stream);
+    if (ui_is_message_center(size)) {
+        ui_message_center(archive, out, entry, mode, stream, size);
+    } else {
+        ui_replace(out, stream);
+    }
     InterlockedExchange(&ui_busy, 0);
     return result;
 }
