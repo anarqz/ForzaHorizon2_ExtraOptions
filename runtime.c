@@ -81,6 +81,7 @@ int runtime_initialize(unsigned char *game_image, const wchar_t *executable_path
         azimuth_apply_account(settings_directory);
         azimuth_apply_ui(game_image);
         azimuth_apply_online_menu(game_image);
+        azimuth_apply_expansions(game_image);
         azimuth_apply_economy_probe(game_image);
         azimuth_apply_no_game_clips(game_image);
         azimuth_apply_pad();

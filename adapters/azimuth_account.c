@@ -51,6 +51,8 @@ static const wchar_t *account_server;
 static volatile LONG account_ready = 1; /* token check finished (or not needed) */
 static volatile LONG account_link;      /* server: 0 not checked yet, 1 answering, 2 not answering */
 static int account_available;           /* fingerprint and paths ready: the menu can work */
+static volatile LONG account_storm_island; /* the online profile has Storm Island */
+#define STORM_ISLAND_PRODUCT "06f06bff-35ee-4821-a289-fbc1765d6b76"
 static int account_active;              /* this session plays as the account */
 static wchar_t account_token[72];
 static wchar_t account_xuid[24];
@@ -359,6 +361,15 @@ static int account_take(const char *reply) {
     if (json_string(reply, "webKey", value, sizeof(value)) && value[0]) {
         utf8_to_wide(value, account_web_key, ARRAY_COUNT(account_web_key));
     }
+    size_t length = text_length(reply);
+    if (text_find(reply, length, "\"expansions\"")) {
+        int storm = text_find(reply, length, STORM_ISLAND_PRODUCT) != 0;
+        InterlockedExchange(&account_storm_island, storm);
+        account_write(L"StormIsland", storm ? L"1" : L"0");
+        if (storm) {
+            azimuth_expansions_granted();
+        }
+    }
     return 1;
 }
 
@@ -434,6 +445,10 @@ int azimuth_account_state(void) {
         return 2;
     }
     return account_token[0] ? 1 : 0;
+}
+
+int azimuth_account_storm_island(void) {
+    return account_storm_island != 0;
 }
 
 const wchar_t *azimuth_account_gamertag(void) {
@@ -871,6 +886,10 @@ void azimuth_apply_account(const wchar_t *directory) {
         log_append("ACCOUNT: account kept but Online=0; playing the offline profile.\r\n");
         return;
     }
+    /* the last reply's expansions, for the game's first licence pass (before /me answers) */
+    wchar_t storm[4];
+    GetPrivateProfileStringW(account_server, L"StormIsland", L"0", storm, ARRAY_COUNT(storm), account_file);
+    InterlockedExchange(&account_storm_island, storm[0] == L'1');
     int patched = account_patch_slot(account_offsets->account_xuid_slot, account_offsets->account_xuid_target,
                                      account_get_xuid, &account_xuid_original);
     for (unsigned i = 0; i < 3; ++i) {

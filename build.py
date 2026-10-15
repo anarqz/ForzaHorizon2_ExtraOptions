@@ -112,6 +112,7 @@ def build(compiler, output, directory, options):
             "adapters/azimuth_update.c",
             "adapters/azimuth_lang.c",
             "adapters/azimuth_online_menu.c",
+            "adapters/azimuth_expansions.c",
             "adapters/azimuth_ui.c",
             "adapters/azimuth_markers.c",
         ]

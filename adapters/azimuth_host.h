@@ -86,6 +86,13 @@ const wchar_t *azimuth_update_text(void);
 void azimuth_account_test(wchar_t *out, size_t cap);
 int azimuth_account_banner(char *out, size_t cap, const char **color);
 
+/* azimuth_expansions.c: Storm Island for profiles that have it (the server's /me lists it). */
+void azimuth_apply_expansions(unsigned char *game_image);
+void azimuth_expansions_granted(void);
+/* azimuth_account.c: whether the online profile has Storm Island (the last reply, kept in the
+   accounts file). */
+int azimuth_account_storm_island(void);
+
 /* azimuth_online_menu.c: Settings > INFINITY. */
 void azimuth_apply_online_menu(unsigned char *game_image);
 /* One tile of the INFINITY screen: heading (UTF-8, NULL = no tile), image or icon under
