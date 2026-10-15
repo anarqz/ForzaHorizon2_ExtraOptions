@@ -121,7 +121,10 @@ typedef struct {
     const char *icon;
     int photo;
 } InfinityTile;
-/* The 8 tiles for the profile's current state (azimuth_online_menu.c). */
+/* The tiles of the INFINITY screen: 0-7 as before, 8 the small tile next to tile 1 (tile 1
+   is then small too; azimuth_ui.c). */
+#define INFINITY_TILE_COUNT 9
+/* The INFINITY_TILE_COUNT tiles for the profile's current state (azimuth_online_menu.c). */
 const InfinityTile *azimuth_infinity_tiles(void);
 /* azimuth_ui.c: the CREDITS + INFINITY tiles in Settings, the INFINITY screen and the
    pause menu's status line. */

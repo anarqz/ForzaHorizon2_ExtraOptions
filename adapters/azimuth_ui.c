@@ -237,12 +237,16 @@ static DWORD WINAPI ui_status_thread(void *unused) {
 
 /* The INFINITY screen is the Settings page class shown again by a new flow exit
    ("infinity", added below), with its tiles replaced: same grid, same styles. Each slot is
-   {style, template, grid x, grid y, x coordinate, y coordinate}. */
-static const char *const ui_slots[8][6] = {
+   {style, template, grid x, grid y, x coordinate, y coordinate}. Slot 8 is the second half of
+   slot 1's place (X_2 = 564 is in Shared_TiledMenus.xaml): when it has a tile, slot 1 is a
+   small icon tile too (ui_small_one). */
+static const char *const ui_slots[INFINITY_TILE_COUNT][6] = {
     {"1x1", "IconTile", "0", "0", "X_0", "Y_0"},             {"2x1", "HorizontalImageTile", "1", "0", "X_1", "Y_0"},
     {"2x1", "HorizontalImageTile", "1", "1", "X_1", "Y_1"}, {"1x1", "IconTile", "3", "0", "X_3", "Y_0"},
     {"1x1", "IconTile", "3", "1", "X_3", "Y_1"},             {"1x1", "IconTile", "4", "0", "X_4", "Y_0"},
-    {"1x1", "IconTile", "4", "1", "X_4", "Y_1"},             {"1x1", "IconTile", "0", "1", "X_0", "Y_1"}};
+    {"1x1", "IconTile", "4", "1", "X_4", "Y_1"},             {"1x1", "IconTile", "0", "1", "X_0", "Y_1"},
+    {"1x1", "IconTile", "2", "0", "X_2", "Y_0"}};
+static const char *const ui_small_one[6] = {"1x1", "IconTile", "1", "0", "X_1", "Y_0"};
 
 static char ui_infinity_buffer[UI_OPTIONS_MAX];
 static UiText ui_infinity = {ui_infinity_buffer, 0, UI_OPTIONS_MAX};
@@ -270,7 +274,7 @@ static int ui_edit_infinity(const char *page, unsigned length, UiText *out) {
     if (!ui_copy(out, &at, item_end + 2, 0, 0)) {
         return 0;
     }
-    for (int i = 0; i < 8; ++i) {
+    for (int i = 0; i < INFINITY_TILE_COUNT; ++i) {
         if (!tiles[i].heading) {
             continue;
         }
@@ -303,8 +307,8 @@ static int ui_edit_infinity(const char *page, unsigned length, UiText *out) {
                  "                                        local:BindingProxy.C=\"DisableMotionBlur\"/>")) {
         return 0;
     }
-    for (int i = 0; i < 8; ++i) {
-        const char *const *slot = ui_slots[i];
+    for (int i = 0; i < INFINITY_TILE_COUNT; ++i) {
+        const char *const *slot = i == 1 && tiles[8].heading ? ui_small_one : ui_slots[i];
         if (!tiles[i].heading) {
             continue;
         }

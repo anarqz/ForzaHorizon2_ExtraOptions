@@ -660,8 +660,8 @@ static void menu_about(void) {
 
 /* ------------------------------------------------------- INFINITY screen */
 
-static InfinityTile menu_tiles[8];
-static MenuAction menu_tile_actions[8];
+static InfinityTile menu_tiles[INFINITY_TILE_COUNT];
+static MenuAction menu_tile_actions[INFINITY_TILE_COUNT];
 
 static void menu_set_tile(int i, const char *heading, const char *icon, int photo, MenuAction action) {
     menu_tiles[i].heading = azimuth_tr8(heading);
@@ -671,8 +671,8 @@ static void menu_set_tile(int i, const char *heading, const char *icon, int phot
 }
 
 /* The tiles for the profile's state (slots: 0 and 7 the small PROFILE and UPDATE tiles of the
-   first column, 1-2 wide, 3-6 small icons). The actions are kept with them, so a click does
-   what its tile said. */
+   first column, 1-2 wide, 3-6 small icons; 8 splits slot 1's place in two small tiles). The
+   actions are kept with them, so a click does what its tile said. */
 static const char *menu_update_heading(void) {
     switch (azimuth_update_state()) {
     case UPDATE_INSTALLED:
@@ -691,19 +691,20 @@ const InfinityTile *azimuth_infinity_tiles(void) {
     if (state < 0) {
         return 0;
     }
-    for (int i = 0; i < 8; ++i) {
+    for (int i = 0; i < INFINITY_TILE_COUNT; ++i) {
         menu_set_tile(i, 0, 0, 0, 0);
     }
     menu_set_tile(7, menu_update_heading(), "Icons/TiledMenus/AutoUpgrade.png", 0, menu_update);
     if (state == 2) {
         menu_set_tile(0, "PROFILE", "Icons/TiledMenus/Autoshow.png", 0, menu_profile);
-        menu_set_tile(1, "ADD FRIEND", "PauseMenuTileBackgrounds/MyRivals.png", 1, menu_add_friend);
+        menu_set_tile(1, "ADD FRIEND", "Icons/TiledMenus/TeamCredits.png", 0, menu_add_friend);
+        menu_set_tile(8, azimuth_world_hosting() ? "WORLD OPEN" : "HOST WORLD", "Icons/TiledMenus/BarnFinds.png", 0,
+                      menu_world);
         menu_set_tile(2, "TEST CONNECTION", "PauseMenuTileBackgrounds/OnlineFreeroam.png", 1, menu_test_connection);
         menu_set_tile(3, "SITE KEY", "Icons/TiledMenus/Options.png", 0, menu_show_key);
-        menu_set_tile(4, azimuth_world_hosting() ? "WORLD OPEN" : "HOST WORLD", "Icons/TiledMenus/Garage.png", 0,
-                      menu_world);
-        menu_set_tile(5, "ABOUT", "Icons/TiledMenus/TeamCredits.png", 0, menu_about);
-        menu_set_tile(6, "MORE", "Icons/TiledMenus/Difficulty.png", 0, menu_more);
+        menu_set_tile(4, "SWITCH PROFILE", "Icons/TiledMenus/Garage.png", 0, menu_log_in);
+        menu_set_tile(5, "ABOUT", "Icons/TiledMenus/Video.png", 0, menu_about);
+        menu_set_tile(6, "LEAVE INFINITY", "Icons/TiledMenus/Difficulty.png", 0, menu_confirm_leave);
     } else if (state == 1) {
         menu_set_tile(0, "PROFILE", "Icons/TiledMenus/Autoshow.png", 0, menu_profile);
         menu_set_tile(1, "JOIN AND RESTART", "PauseMenuTileBackgrounds/OnlineRoadtrip.png", 1, menu_join);
@@ -734,8 +735,9 @@ static void menu_tile_4(void *page) { menu_tile(4, page); }
 static void menu_tile_5(void *page) { menu_tile(5, page); }
 static void menu_tile_6(void *page) { menu_tile(6, page); }
 static void menu_tile_7(void *page) { menu_tile(7, page); }
-static MenuPageFn const menu_tile_handlers[8] = {menu_tile_0, menu_tile_1, menu_tile_2, menu_tile_3,
-                                                  menu_tile_4, menu_tile_5, menu_tile_6, menu_tile_7};
+static void menu_tile_8(void *page) { menu_tile(8, page); }
+static MenuPageFn const menu_tile_handlers[INFINITY_TILE_COUNT] = {
+    menu_tile_0, menu_tile_1, menu_tile_2, menu_tile_3, menu_tile_4, menu_tile_5, menu_tile_6, menu_tile_7, menu_tile_8};
 
 /* The popup version of the menu: used when the INFINITY screen cannot be opened. */
 static void menu_click(void *page) {
@@ -1007,17 +1009,17 @@ static void menu_infinity_click(void *page) {
 }
 
 /* After the game binds its own tiles, ours: PART_Button_Infinity on Settings and
-   PART_Button_I0..I7 on the INFINITY screen (the same page class; a page has only its own
+   PART_Button_I0..I8 on the INFINITY screen (the same page class; a page has only its own
    buttons, binding a missing name does nothing). A handler is a member-function pointer pair
    {function, this adjustment}. */
 static void menu_init(void *page) {
-    static void *handlers[9][2];
-    static const char *const names[9] = {"PART_Button_Infinity", "PART_Button_I0", "PART_Button_I1",
-                                         "PART_Button_I2",       "PART_Button_I3", "PART_Button_I4",
-                                         "PART_Button_I5",       "PART_Button_I6", "PART_Button_I7"};
+    static void *handlers[INFINITY_TILE_COUNT + 1][2];
+    static const char *const names[INFINITY_TILE_COUNT + 1] = {
+        "PART_Button_Infinity", "PART_Button_I0", "PART_Button_I1", "PART_Button_I2", "PART_Button_I3",
+        "PART_Button_I4",       "PART_Button_I5", "PART_Button_I6", "PART_Button_I7", "PART_Button_I8"};
     MenuBindButtonFn bind = (MenuBindButtonFn)(uintptr_t)(menu_game + MENU_BIND_BUTTON_RVA);
     menu_init_original(page);
-    for (int i = 0; i < 9; ++i) {
+    for (int i = 0; i < INFINITY_TILE_COUNT + 1; ++i) {
         handlers[i][0] = (void *)(uintptr_t)(i ? menu_tile_handlers[i - 1] : menu_infinity_click);
         bind(page, names[i], (void *const *)handlers[i]);
     }
