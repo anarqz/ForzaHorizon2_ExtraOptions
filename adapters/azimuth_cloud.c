@@ -1,8 +1,9 @@
 /* FH2Online cloud save: while the game plays an online profile, the server keeps the newest
    save revision of the account, so the profile continues on any PC it logs in from.
 
-   Azimuth keeps a profile in data\saves\player-1\User_<XUID in hex>\revisions\<16 hex
-   digits>\: a "commit" file (the SHA-256, size and name of each file under data\, checked when
+   Azimuth keeps a profile in <saves>\player-1\User_<XUID in hex>\revisions\<16 hex digits>\
+   (<saves> is data\saves up to 0.9.8; 0.9.9 moved it into a folder per game, see
+   saves_folder): a "commit" file (the SHA-256, size and name of each file under data\, checked when
    the game loads it) and data\*. A revision is bundled as is, each file compressed by
    azimuth_codec.c ("FH2SAVE1", see server/src/db/saves.rs), and sent to PUT /infinity/v1/save.
    Uploads use method 2; downloads also take method 1, the XPRESS Huffman of ntdll that older
@@ -50,8 +51,8 @@ static MoveFileExWFn cloud_move;
 static WritePrivateProfileStringWFn cloud_write_profile;
 static SleepFn cloud_sleep;
 
-static wchar_t cloud_saves[CLOUD_PATH];    /* data\saves */
-static wchar_t cloud_profile[CLOUD_PATH];  /* data\saves\player-1\User_<hex> */
+static wchar_t cloud_saves[CLOUD_PATH];    /* data\saves (0.9.9: see saves_folder) */
+static wchar_t cloud_profile[CLOUD_PATH];  /* <saves>\player-1\User_<hex> */
 static wchar_t cloud_ini[CLOUD_PATH];
 static wchar_t cloud_section[300];
 static wchar_t cloud_headers[200];         /* X-Fh2-Token: ... */
@@ -92,6 +93,25 @@ static int wjoin(wchar_t *out, const wchar_t *a, const wchar_t *b, const wchar_t
     }
     out[n] = 0;
     return 1;
+}
+
+/* cloud_saves = the folder Azimuth keeps the saves in, from `bin` (data\bin). 0.9.9 moved them
+   from data\saves into a folder per game under data\titles, named after FH2's title id
+   (1A96545B): the first of those names that exists, else data\saves. */
+static int saves_folder(const wchar_t *bin) {
+    static wchar_t joined[CLOUD_PATH];
+    static const wchar_t *const per_game[] = {L"\\..\\titles\\1A96545B\\saves", L"\\..\\titles\\title-1a96545b\\saves"};
+    if (azimuth_host_build((const unsigned char *)GetModuleHandleW(0)) == AZIMUTH_099) {
+        for (size_t i = 0; i < sizeof(per_game) / sizeof(per_game[0]); ++i) {
+            DWORD attributes;
+            if (wjoin(joined, bin, per_game[i], 0) && GetFullPathNameW(joined, CLOUD_PATH, cloud_saves, 0) &&
+                (attributes = GetFileAttributesW(cloud_saves)) != INVALID_FILE_ATTRIBUTES &&
+                (attributes & FILE_ATTRIBUTE_DIRECTORY)) {
+                return 1;
+            }
+        }
+    }
+    return wjoin(joined, bin, L"\\..\\saves", 0) && GetFullPathNameW(joined, CLOUD_PATH, cloud_saves, 0);
 }
 
 /* "data/X" -> L"data\\X" */
@@ -640,13 +660,12 @@ static int cloud_resolve(void) {
    as for azimuth_cloud_start. Returns 1, or 0 with `why` saying what failed. */
 int azimuth_cloud_upload_offline(const wchar_t *bin, const wchar_t *token, const wchar_t *ini, const wchar_t *section,
                                  const char **why) {
-    static wchar_t joined[CLOUD_PATH];
     static CloudRevision offline;
     if (!cloud_resolve()) {
         *why = "system functions missing";
         return 0;
     }
-    if (!wjoin(joined, bin, L"\\..\\saves", 0) || !GetFullPathNameW(joined, CLOUD_PATH, cloud_saves, 0) ||
+    if (!saves_folder(bin) ||
         !wjoin(cloud_profile, cloud_saves, L"\\player-1\\User_9000000000000", 0) || wlen(ini) >= CLOUD_PATH ||
         wlen(section) >= ARRAY_COUNT(cloud_section) || wlen(token) > 100) {
         *why = "paths too long";
@@ -672,7 +691,6 @@ int azimuth_cloud_upload_offline(const wchar_t *bin, const wchar_t *token, const
    device token, `ini`/`section` where SaveCommit is kept. Then watches for new revisions. */
 void azimuth_cloud_start(const wchar_t *bin, const wchar_t *xuid, const wchar_t *token, const wchar_t *ini,
                          const wchar_t *section) {
-    static wchar_t joined[CLOUD_PATH];
     static CloudRevision local;
     unsigned long long value = 0, highest = 0;
     if (!cloud_resolve()) {
@@ -692,7 +710,7 @@ void azimuth_cloud_start(const wchar_t *bin, const wchar_t *xuid, const wchar_t 
         *--h = L"0123456789ABCDEF"[value & 15];
         value >>= 4;
     } while (value);
-    if (!wjoin(joined, bin, L"\\..\\saves", 0) || !GetFullPathNameW(joined, CLOUD_PATH, cloud_saves, 0) ||
+    if (!saves_folder(bin) ||
         !wjoin(cloud_profile, cloud_saves, L"\\player-1\\User_", h) || wlen(ini) >= CLOUD_PATH ||
         wlen(section) >= ARRAY_COUNT(cloud_section) || wlen(token) > 100) {
         return;

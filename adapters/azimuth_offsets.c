@@ -47,10 +47,7 @@ const AzimuthOffsets *azimuth_offsets(const unsigned char *base) {
     case AZIMUTH_097:
         return &offsets_097;
     case AZIMUTH_099:
-        /* Not yet: 0.9.9 moves the saves into a folder per game, and azimuth_cloud.c still
-           reads data\saves. Return &offsets_099 once the cloud save follows it. */
-        (void)offsets_099;
-        return 0;
+        return &offsets_099;
     default:
         return 0;
     }
