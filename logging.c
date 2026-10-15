@@ -70,6 +70,15 @@ void log_start(const wchar_t *directory, const ModOptions *options) {
     if (!path_join(startup_log_path, directory, MOD_LOG_NAME)) {
         return;
     }
+    /* The last launch's log is kept as FH2_ExtraOptions.previous.log (once a launch): a game
+       that froze or crashed is started again before anyone looks, and ForzaInfinity-Report
+       puts both in the report. */
+    static int rotated;
+    static wchar_t previous_path[PATH_CAPACITY];
+    if (!rotated && path_join(previous_path, directory, MOD_PREVIOUS_LOG_NAME)) {
+        rotated = 1;
+        MoveFileExW(startup_log_path, previous_path, MOVEFILE_REPLACE_EXISTING);
+    }
     HANDLE file = CreateFileW(startup_log_path, GENERIC_WRITE, FILE_SHARE_READ, NULL, CREATE_ALWAYS,
                               FILE_ATTRIBUTE_NORMAL, NULL);
     if (file == INVALID_HANDLE_VALUE) {
