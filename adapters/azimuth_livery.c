@@ -57,6 +57,43 @@ static const HostPatchSet mask_patch_set_099 = {0x13dc40,
                                                 mask_patches,
                                                 ARRAY_COUNT(mask_patches)};
 
+/* Other players' layered liveries (free roam, car meets): the game asks the device's
+   CreatePlacementTexture2D (vtable +0x200) for a 4096x4096 R8G8B8A8_UNORM_SRGB texture with 13
+   mips, no bind flags and CPU read (desc 4096, 4096, 13, 1, 29, 1, 0, 0, 0, 0x20000, 0), placed
+   in its own memory, and Azimuth stops the game ("requires GPU-write/CPU-map/unknown placement
+   semantics"; 0.9.9 FUN_140121c40, 0.9.7 FUN_1400ea0b0). Its second accepted profile is a
+   shader resource (bind flags 8, no CPU access, one sample, 1-15 mips, 1-2048 slices, usage
+   0/1); the patch drops those two tests (the jne after cmp [desc+0x20],8 and after
+   cmp [desc+0x24],0) so the texture is made as a placed shader resource instead. What the GPU
+   writes into it may not reach the CPU copy, so a remote livery can look wrong, but the game
+   goes on. The function is the same in 0.9.7 and 0.9.9; only its address moved. */
+static const unsigned char placement_nops[] = {0x90, 0x90, 0x90, 0x90, 0x90, 0x90};
+static const HostCodePatch placement_patches[] = {{0x05, sizeof(placement_nops), placement_nops},
+                                                  {0x0f, sizeof(placement_nops), placement_nops}};
+static const unsigned char placement_original_hash[32] = {
+    0x89, 0x89, 0x43, 0xc4, 0x8a, 0xf4, 0x37, 0xf4, 0x06, 0x01, 0x0b, 0xec, 0x1d, 0xfb, 0x7c, 0x0e,
+    0x71, 0x77, 0x07, 0x0a, 0xed, 0x1e, 0xf9, 0xae, 0xae, 0x47, 0x6d, 0x8a, 0xd4, 0x97, 0x9e, 0x6e};
+static const unsigned char placement_patched_hash[32] = {
+    0xfc, 0xe0, 0x02, 0xef, 0x96, 0xe5, 0x81, 0x40, 0xc2, 0x89, 0xab, 0x5b, 0x7c, 0x03, 0xd2, 0xf5,
+    0x01, 0xbe, 0x1a, 0x31, 0x5d, 0xdb, 0x88, 0xd8, 0xe3, 0x61, 0x70, 0x69, 0x13, 0x30, 0x57, 0xb2};
+static const HostPatchSet placement_patch_set_097 = {
+    0xea2a6, 0x15, placement_original_hash, placement_patched_hash,
+    placement_patches, ARRAY_COUNT(placement_patches)};
+static const HostPatchSet placement_patch_set_099 = {
+    0x121e36, 0x15, placement_original_hash, placement_patched_hash,
+    placement_patches, ARRAY_COUNT(placement_patches)};
+
+static int apply_placement(unsigned char *base) {
+    static const HostPatchSet *const versions[] = {
+        [AZIMUTH_097] = &placement_patch_set_097,
+        [AZIMUTH_099] = &placement_patch_set_099,
+    };
+    AzimuthBuild build = azimuth_host_build(base);
+    return build > AZIMUTH_UNKNOWN && build < ARRAY_COUNT(versions) && versions[build]
+               ? azimuth_patch_host_code(base, versions[build])
+               : 0;
+}
+
 static int apply_livery(unsigned char *base) {
     static const HostPatchSet *const versions[] = {
         [AZIMUTH_096] = &mask_patch_set,
@@ -82,10 +119,20 @@ void azimuth_apply_livery_compatibility(void) {
         log_append("AZIMUTH: 2x MSAA livery compatibility skipped; "
                    "host is not a supported inspected mask-helper build.\r\n");
     }
+    result = apply_placement((unsigned char *)GetModuleHandleW(NULL));
+    log_append(result > 0   ? "AZIMUTH: layered liveries of other players: CPU-read placement "
+                              "textures are made as shader resources.\r\n"
+               : result < 0 ? "AZIMUTH: placement texture patch could not change memory "
+                              "protection; host code left unchanged.\r\n"
+                            : "AZIMUTH: placement texture patch skipped; not a 0.9.7 or 0.9.9 "
+                              "build with the inspected bytes.\r\n");
 }
 
 #ifdef FH2_TWEAKS_TEST
 __declspec(dllexport) int Fh2TestAzimuthLiveryCompatibility(void *image) {
     return apply_livery(image);
+}
+__declspec(dllexport) int Fh2TestAzimuthPlacementTextures(void *image) {
+    return apply_placement(image);
 }
 #endif
