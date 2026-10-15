@@ -112,6 +112,7 @@ def build(compiler, output, directory, options):
             "adapters/azimuth_account.c",
             "adapters/azimuth_codec.c",
             "adapters/azimuth_cloud.c",
+            "adapters/azimuth_sign.c",
             "adapters/azimuth_update.c",
             "adapters/azimuth_lang.c",
             "adapters/azimuth_online_menu.c",

@@ -1,14 +1,18 @@
 /* FH2Online self-update. When the server's /info names a newer hook (latestHook, with the
    GitHub release it is in: latestRelease), the hook installs it by itself:
-   - azimuth-tls.dll and azimuth-tls.dll.sha256 come from that release of the official
-     repository (github.com/anarqz/ForzaInfinity), never from the game's server: a server only
-     says which release is the newest, so it cannot hand its players code;
+   - azimuth-tls.dll, azimuth-tls.dll.sha256 and azimuth-tls.dll.sig come from that release of
+     the official repository (github.com/anarqz/ForzaInfinity), never from the game's server: a
+     server only says which release is the newest, so it cannot hand its players code;
+   - the .sig must be the project's Ed25519 signature of "fh2online-update-v1 <SHA-256 hex>"
+     (adapters/azimuth_sign.h; tools/sign_release.sh makes it), so that a release put on GitHub
+     by someone without the private key is not installed either. Unsigned: not installed;
    - the DLL must match the published SHA-256, be a PE image and carry "+fh2online.N", N being
      the newer build the server named;
    - it is written beside ours as .new, then ours is renamed to .previous (Windows and Wine let a
      loaded DLL be renamed) and .new takes its name: the game runs it from its next start.
    [Network] AutoUpdate=0 turns that off: the menu then only says that an update is out. */
 #include "azimuth_host.h"
+#include "azimuth_sign.h"
 #include "extra_options.h"
 #include "logging.h"
 #include "sha256.h"
@@ -166,12 +170,18 @@ static const char *update_download(void) {
         return "GitHub did not answer";
     }
     unsigned char want[32], have[32];
+    static unsigned char signature[80];
     for (int i = 0; i < 32; ++i) {
         int hi = hex_digit(sha_text[2 * i]), lo = hex_digit(sha_text[2 * i + 1]);
         if (hi < 0 || lo < 0) {
             return "the release's SHA-256 is not readable";
         }
         want[i] = (unsigned char)(hi * 16 + lo);
+    }
+    if (!update_url(url, ARRAY_COUNT(url), "azimuth-tls.dll.sig") ||
+        azimuth_net_fetch(L"github.com", url, signature, sizeof(signature), &got) != 200 || got != 64) {
+        update_log("signature does not verify; not installed", " (no azimuth-tls.dll.sig of 64 bytes)");
+        return "the release is not signed";
     }
     unsigned char *dll = HeapAlloc(GetProcessHeap(), 0, UPDATE_MAX_DLL);
     if (!dll) {
@@ -189,10 +199,14 @@ static const char *update_download(void) {
         sha256_finalize(&hash, have);
         if (!memory_equal(want, have, 32)) {
             why = "the download does not match the release's SHA-256";
+        } else if (!azimuth_sign_update_ok(signature, have, azimuth_sign_release_key)) {
+            update_log("signature does not verify; not installed", "");
+            why = "the release's signature does not verify";
         } else if (dll[0] != 'M' || dll[1] != 'Z' ||
                    update_build_in((const char *)dll, got) != update_build(update_latest)) {
             why = "the download is not the version the server named";
         } else {
+            update_log("signed update", "");
             why = update_install(dll, got);
         }
     }
