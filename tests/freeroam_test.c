@@ -36,6 +36,9 @@ int path_join(wchar_t output[PATH_CAPACITY], const wchar_t *directory, const wch
 int azimuth_net_proxy_enabled(void) {
     return 1;
 }
+void azimuth_world_set_directory(const wchar_t *directory) {
+    (void)directory;
+}
 
 /* Azimuth's HSTRING layout, as fr_hstring reads it. */
 typedef struct {
