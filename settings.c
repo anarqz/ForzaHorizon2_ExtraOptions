@@ -104,7 +104,7 @@ static int known_section(const char *name) {
     if (text_equal_ignore_case(name, "Camera") || text_equal_ignore_case(name, "Graphics") ||
         text_equal_ignore_case(name, "HUD") || text_equal_ignore_case(name, "General") ||
         text_equal_ignore_case(name, "Language") || text_equal_ignore_case(name, "Network") ||
-        text_equal_ignore_case(name, "Account")) {
+        text_equal_ignore_case(name, "Account") || text_equal_ignore_case(name, "FreeRoam")) {
         return 1;
     }
     for (size_t index = 0; index < setting_count; ++index) {
