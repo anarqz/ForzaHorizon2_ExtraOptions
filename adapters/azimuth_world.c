@@ -885,6 +885,49 @@ int azimuth_world_of(unsigned long long xuid, char *host, size_t host_capacity, 
     return 1;
 }
 
+/* The next open world after the one of host `after` (0: the first): GET worlds/browse/<after>.
+   1 found (its host xuid, name, host's name, players, whether the host is a friend), 0 none,
+   -1 no answer. */
+int azimuth_world_browse(unsigned long long after, unsigned long long *id, char *name, size_t name_capacity, char *host,
+                         size_t host_capacity, unsigned *players, unsigned *max_players, int *friend_world) {
+    wchar_t path[64];
+    static const wchar_t prefix[] = L"/infinity/v1/worlds/browse/";
+    size_t n = 0;
+    char digits[24], value[32];
+    unsigned count = 0;
+    if (!azimuth_account_token()) {
+        return -1;
+    }
+    do {
+        digits[count++] = (char)('0' + after % 10);
+        after /= 10;
+    } while (after);
+    for (size_t i = 0; prefix[i]; ++i) path[n++] = prefix[i];
+    while (count) path[n++] = (wchar_t)digits[--count];
+    path[n] = 0;
+    DWORD status = azimuth_net_call_quick(L"GET", path, world_token_header(), 0, world_of_reply, sizeof(world_of_reply),
+                                          3000);
+    if (status != 200) {
+        return -1;
+    }
+    if (text_find(world_of_reply, text_length(world_of_reply), "\"world\":null")) {
+        return 0;
+    }
+    unsigned long long parsed = 0;
+    world_json(world_of_reply, "id", value, sizeof(value));
+    for (const char *p = value; *p >= '0' && *p <= '9'; ++p) parsed = parsed * 10 + (unsigned)(*p - '0');
+    *id = parsed;
+    world_json(world_of_reply, "name", name, name_capacity);
+    world_json(world_of_reply, "host", host, host_capacity);
+    world_json(world_of_reply, "players", value, sizeof(value));
+    *players = world_number(value, text_length(value), 0);
+    world_json(world_of_reply, "maxPlayers", value, sizeof(value));
+    *max_players = world_number(value, text_length(value), 0);
+    world_json(world_of_reply, "friend", value, sizeof(value));
+    *friend_world = value[0] == 't';
+    return parsed != 0;
+}
+
 /* Chooses the world of `host` for the next FREE ROAM ONLINE (POST worlds/<host>/join).
    1 taken; 0 refused, with the server's reason in `error` (UTF-8). */
 int azimuth_world_join(unsigned long long host, const char *password, char *error, size_t error_capacity) {

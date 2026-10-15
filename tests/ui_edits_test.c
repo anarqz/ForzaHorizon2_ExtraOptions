@@ -38,7 +38,8 @@ static const InfinityTile test_tiles[INFINITY_TILE_COUNT] = {
     {"TROCAR PERFIL", "Icons/TiledMenus/Garage.png", 0},
     {0, 0, 0},
     {"UP TO DATE", "Icons/TiledMenus/AutoUpgrade.png", 0},
-    {"HOSPEDAR MUNDO", "Icons/TiledMenus/BarnFinds.png", 0}};
+    {"HOSPEDAR MUNDO", "Icons/TiledMenus/BarnFinds.png", 0},
+    {"PROCURAR MUNDO", "Icons/TiledMenus/CustomUpgrade.png", 0}};
 const InfinityTile *azimuth_infinity_tiles(void) {
     return test_tiles;
 }

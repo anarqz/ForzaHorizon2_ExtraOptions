@@ -114,6 +114,9 @@ const wchar_t *azimuth_world_car_db_header(void);
 int azimuth_world_of(unsigned long long xuid, char *host, size_t host_capacity, int *password, char *why,
                      size_t why_capacity);
 int azimuth_world_join(unsigned long long host, const char *password, char *error, size_t error_capacity);
+/* FIND WORLD: the next open world after the one of `after` (1 found, 0 none, -1 no answer). */
+int azimuth_world_browse(unsigned long long after, unsigned long long *id, char *name, size_t name_capacity, char *host,
+                         size_t host_capacity, unsigned *players, unsigned *max_players, int *friend_world);
 void azimuth_world_on_request(const wchar_t *method, const wchar_t *url, const unsigned char *body, size_t size);
 void azimuth_world_stop(void);
 void azimuth_world_describe(char *visibility, size_t visibility_capacity, int *has_password,
@@ -134,9 +137,9 @@ typedef struct {
     const char *icon;
     int photo;
 } InfinityTile;
-/* The tiles of the INFINITY screen: 0-7 as before, 8 the small tile next to tile 1 (tile 1
-   is then small too; azimuth_ui.c). */
-#define INFINITY_TILE_COUNT 9
+/* The tiles of the INFINITY screen: 0-7 as before, 8 the small tile next to tile 1 and 9 the
+   small tile next to tile 2 (tiles 1 and 2 are then small too; azimuth_ui.c). */
+#define INFINITY_TILE_COUNT 10
 /* The INFINITY_TILE_COUNT tiles for the profile's current state (azimuth_online_menu.c). */
 const InfinityTile *azimuth_infinity_tiles(void);
 /* azimuth_ui.c: the CREDITS + INFINITY tiles in Settings, the INFINITY screen and the

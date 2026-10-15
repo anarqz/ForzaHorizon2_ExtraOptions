@@ -605,6 +605,90 @@ static void menu_world(void) {
                buttons, 2);
 }
 
+/* FIND WORLD: the open worlds, one at a time. A friend's world is offered as is; a stranger's
+   comes with a warning (its relay could be hostile; FREE ROAM ONLINE goes straight only to
+   friends' worlds). Enter chooses it for the next FREE ROAM ONLINE; Keep looking shows the
+   next; Leave closes. */
+static unsigned long long menu_find_after, menu_find_id;
+static wchar_t menu_find_host[64];
+
+static void menu_find_next(void);
+
+static void menu_find_enter(void) {
+    char error[200];
+    static wchar_t text[300];
+    if (!azimuth_world_join(menu_find_id, "", error, sizeof(error))) {
+        MultiByteToWideChar(CP_UTF8, 0, error, -1, text, (int)ARRAY_COUNT(text));
+        menu_info(L"FIND WORLD", text);
+        return;
+    }
+    line_start();
+    line_add(L"Done. Go to FREE ROAM ONLINE to enter the world of ");
+    menu_line_raw(menu_find_host);
+    line_add(L". If you are online now, go back to HORIZON SOLO first.");
+    menu_info(L"FIND WORLD", menu_line);
+}
+
+static void menu_find_more(void) {
+    menu_find_after = menu_find_id;
+    menu_find_next();
+}
+
+static void menu_find_next(void) {
+    char name[96], host[64];
+    unsigned players = 0, max_players = 0;
+    int friend_world = 0;
+    static wchar_t text[128];
+    unsigned long long id = 0;
+    int found = azimuth_world_browse(menu_find_after, &id, name, sizeof(name), host, sizeof(host), &players,
+                                     &max_players, &friend_world);
+    if (found < 0) {
+        menu_retry(L"FIND WORLD", L"The server did not answer.", menu_find_next);
+        return;
+    }
+    if (!found) {
+        menu_info(L"FIND WORLD", menu_find_after ? L"There are no more open worlds right now."
+                                                 : L"There is no open world right now. Ask a friend to host one, or host your own (HOST WORLD).");
+        return;
+    }
+    menu_find_id = id;
+    MultiByteToWideChar(CP_UTF8, 0, host, -1, menu_find_host, (int)ARRAY_COUNT(menu_find_host));
+    line_start();
+    if (!friend_world) {
+        line_add(L"This world belongs to a player who is not your friend. Joining a stranger's world can be unsafe: Infinity has safety checks, but as an open-source project, ill-intentioned players may find ways around them that we cannot foresee. Prefer playing online only with people you know.\n\n");
+    }
+    MultiByteToWideChar(CP_UTF8, 0, name, -1, text, (int)ARRAY_COUNT(text));
+    menu_line_raw(text);
+    line_add(L" (");
+    menu_line_raw(menu_find_host);
+    line_add(L")\nPlayers: ");
+    wchar_t digits[12];
+    unsigned v = players, n = 0;
+    do {
+        digits[n++] = (wchar_t)(L'0' + v % 10);
+        v /= 10;
+    } while (v);
+    for (unsigned i = 0; i < n; ++i) text[i] = digits[n - 1 - i];
+    text[n] = L'/';
+    v = max_players;
+    unsigned m = 0;
+    do {
+        digits[m++] = (wchar_t)(L'0' + v % 10);
+        v /= 10;
+    } while (v);
+    for (unsigned i = 0; i < m; ++i) text[n + 1 + i] = digits[m - 1 - i];
+    text[n + 1 + m] = 0;
+    menu_line_raw(text);
+    static const MenuButton buttons[3] = {{L"Enter", menu_find_enter}, {L"Keep looking", menu_find_more},
+                                          {L"Leave", menu_nothing}};
+    menu_popup(friend_world ? L"FIND WORLD" : L"UNKNOWN WORLD", menu_line, buttons, 3);
+}
+
+static void menu_find_world(void) {
+    menu_find_after = 0;
+    menu_find_next();
+}
+
 static void menu_test_connection(void) {
     static wchar_t report[600];
     azimuth_account_test(report, ARRAY_COUNT(report));
@@ -710,7 +794,8 @@ const InfinityTile *azimuth_infinity_tiles(void) {
         menu_set_tile(1, "ADD FRIEND", "Icons/TiledMenus/TeamCredits.png", 0, menu_add_friend);
         menu_set_tile(8, azimuth_world_hosting() ? "WORLD OPEN" : "HOST WORLD", "Icons/TiledMenus/BarnFinds.png", 0,
                       menu_world);
-        menu_set_tile(2, "TEST CONNECTION", "PauseMenuTileBackgrounds/OnlineFreeroam.png", 1, menu_test_connection);
+        menu_set_tile(2, "TEST CONNECTION", "Icons/TiledMenus/Controls.png", 0, menu_test_connection);
+        menu_set_tile(9, "FIND WORLD", "Icons/TiledMenus/CustomUpgrade.png", 0, menu_find_world);
         menu_set_tile(3, "SITE KEY", "Icons/TiledMenus/Options.png", 0, menu_show_key);
         menu_set_tile(4, "SWITCH PROFILE", "Icons/TiledMenus/Garage.png", 0, menu_log_in);
         menu_set_tile(5, "ABOUT", "Icons/TiledMenus/Video.png", 0, menu_about);
@@ -746,8 +831,10 @@ static void menu_tile_5(void *page) { menu_tile(5, page); }
 static void menu_tile_6(void *page) { menu_tile(6, page); }
 static void menu_tile_7(void *page) { menu_tile(7, page); }
 static void menu_tile_8(void *page) { menu_tile(8, page); }
-static MenuPageFn const menu_tile_handlers[INFINITY_TILE_COUNT] = {
-    menu_tile_0, menu_tile_1, menu_tile_2, menu_tile_3, menu_tile_4, menu_tile_5, menu_tile_6, menu_tile_7, menu_tile_8};
+static void menu_tile_9(void *page) { menu_tile(9, page); }
+static MenuPageFn const menu_tile_handlers[INFINITY_TILE_COUNT] = {menu_tile_0, menu_tile_1, menu_tile_2, menu_tile_3,
+                                                                   menu_tile_4, menu_tile_5, menu_tile_6, menu_tile_7,
+                                                                   menu_tile_8, menu_tile_9};
 
 /* The popup version of the menu: used when the INFINITY screen cannot be opened. */
 static void menu_click(void *page) {
@@ -1110,14 +1197,15 @@ static void menu_infinity_click(void *page) {
 }
 
 /* After the game binds its own tiles, ours: PART_Button_Infinity on Settings and
-   PART_Button_I0..I8 on the INFINITY screen (the same page class; a page has only its own
+   PART_Button_I0..I9 on the INFINITY screen (the same page class; a page has only its own
    buttons, binding a missing name does nothing). A handler is a member-function pointer pair
    {function, this adjustment}. */
 static void menu_init(void *page) {
     static void *handlers[INFINITY_TILE_COUNT + 1][2];
     static const char *const names[INFINITY_TILE_COUNT + 1] = {
         "PART_Button_Infinity", "PART_Button_I0", "PART_Button_I1", "PART_Button_I2", "PART_Button_I3",
-        "PART_Button_I4",       "PART_Button_I5", "PART_Button_I6", "PART_Button_I7", "PART_Button_I8"};
+        "PART_Button_I4",       "PART_Button_I5", "PART_Button_I6", "PART_Button_I7", "PART_Button_I8",
+        "PART_Button_I9"};
     MenuBindButtonFn bind = (MenuBindButtonFn)(uintptr_t)(menu_game + MENU_BIND_BUTTON_RVA);
     menu_init_original(page);
     for (int i = 0; i < INFINITY_TILE_COUNT + 1; ++i) {

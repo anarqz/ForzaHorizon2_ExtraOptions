@@ -245,8 +245,9 @@ static const char *const ui_slots[INFINITY_TILE_COUNT][6] = {
     {"2x1", "HorizontalImageTile", "1", "1", "X_1", "Y_1"}, {"1x1", "IconTile", "3", "0", "X_3", "Y_0"},
     {"1x1", "IconTile", "3", "1", "X_3", "Y_1"},             {"1x1", "IconTile", "4", "0", "X_4", "Y_0"},
     {"1x1", "IconTile", "4", "1", "X_4", "Y_1"},             {"1x1", "IconTile", "0", "1", "X_0", "Y_1"},
-    {"1x1", "IconTile", "2", "0", "X_2", "Y_0"}};
+    {"1x1", "IconTile", "2", "0", "X_2", "Y_0"},             {"1x1", "IconTile", "2", "1", "X_2", "Y_1"}};
 static const char *const ui_small_one[6] = {"1x1", "IconTile", "1", "0", "X_1", "Y_0"};
+static const char *const ui_small_two[6] = {"1x1", "IconTile", "1", "1", "X_1", "Y_1"};
 
 static char ui_infinity_buffer[UI_OPTIONS_MAX];
 static UiText ui_infinity = {ui_infinity_buffer, 0, UI_OPTIONS_MAX};
@@ -308,7 +309,9 @@ static int ui_edit_infinity(const char *page, unsigned length, UiText *out) {
         return 0;
     }
     for (int i = 0; i < INFINITY_TILE_COUNT; ++i) {
-        const char *const *slot = i == 1 && tiles[8].heading ? ui_small_one : ui_slots[i];
+        const char *const *slot = i == 1 && tiles[8].heading   ? ui_small_one
+                                  : i == 2 && tiles[9].heading ? ui_small_two
+                                                               : ui_slots[i];
         if (!tiles[i].heading) {
             continue;
         }
