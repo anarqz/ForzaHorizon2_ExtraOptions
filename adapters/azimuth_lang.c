@@ -256,6 +256,8 @@ static const LangText8 lang_texts8[] = {
      "INFINITY  |  VERIFICANDO O SERVIDOR..."},
     {"Could not reach the server. Check its address and that it is running.",
      "Não foi possível falar com o servidor. Confira o endereço e se ele está rodando."},
+    {"The server is busy. Try again in a moment.",
+     "O servidor está ocupado. Tente de novo em instantes."},
     {"The server refused the request.",
      "O servidor recusou o pedido."},
     {"The profile ",

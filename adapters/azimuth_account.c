@@ -380,6 +380,8 @@ static void account_error(DWORD status, const char *reply, wchar_t *message, siz
     } else if (!status) {
         utf8_to_wide(azimuth_tr8("Could not reach the server. Check its address and that it is running."),
                      message, cap);
+    } else if (status == 429) {
+        utf8_to_wide(azimuth_tr8("The server is busy. Try again in a moment."), message, cap);
     } else {
         utf8_to_wide(azimuth_tr8("The server refused the request."), message, cap);
     }
