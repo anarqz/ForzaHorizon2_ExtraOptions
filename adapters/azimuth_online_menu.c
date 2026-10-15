@@ -871,6 +871,31 @@ static void actions_insert(void *collection, int action, const wchar_t *label) {
     game_object_release(made);
 }
 
+/* Diagnostic (once): the PLAYER ACTIONS page's vtable and its slot +0x5b8, which the game's
+   keyboard calls on the page that opened it (the password of JOIN WORLD needs to know it). */
+static void actions_log_page(void *page) {
+    static volatile LONG logged;
+    if (InterlockedExchange(&logged, 1)) {
+        return;
+    }
+    static const char hex[] = "0123456789abcdef";
+    unsigned char *vtable = page ? *(unsigned char **)page : 0;
+    void *slot = 0;
+    if (vtable) {
+        memory_read(vtable + 0x5b8, &slot, sizeof(slot));
+    }
+    unsigned long long values[2] = {(unsigned long long)(vtable - menu_game),
+                                    (unsigned long long)((unsigned char *)slot - menu_game)};
+    char text[96] = "MENU: player actions page vtable game+0000000000 slot 0x5b8 game+0000000000\r\n";
+    unsigned at[2] = {38, 65};
+    for (int v = 0; v < 2; ++v) {
+        for (int i = 0; i < 10; ++i) {
+            text[at[v] + i] = hex[(values[v] >> (4 * (9 - i))) & 15];
+        }
+    }
+    log_append(text);
+}
+
 static void actions_add(void *page, void **list, void **item) {
     void *collection = list ? *list : 0;
     int id = item && *item ? *(int *)((unsigned char *)*item + 0x68) : 0;
@@ -879,6 +904,7 @@ static void actions_add(void *page, void **list, void **item) {
     if (id != 1 || !(mask & 1) || !collection) {
         return;
     }
+    actions_log_page(page);
     unsigned long long xuid = actions_player(page);
     int state = azimuth_account_friend_state(xuid);
     if (state < 0) {
