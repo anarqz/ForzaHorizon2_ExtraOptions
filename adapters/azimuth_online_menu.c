@@ -334,13 +334,25 @@ static void menu_show_created(void) {
 }
 
 /* Create profile: the name; the profile starts from the player's newest offline save. */
+static void menu_ask_name(void);
+static void menu_ask_key(void);
+static void menu_add_friend(void);
+
+/* Something went wrong: say what, and offer the step again. */
+static void menu_retry(const wchar_t *title, const wchar_t *error, MenuAction again) {
+    MenuButton buttons[2] = {{L"Try again", again}, {L"Cancel", menu_nothing}};
+    line_start();
+    line_add(error);
+    menu_popup(title, menu_line, buttons, 2);
+}
+
 static void menu_name_typed(const wchar_t *name) {
     static wchar_t error[400];
     if (!name[0]) {
         return; /* keyboard cancelled */
     }
     if (!azimuth_account_register(name, error, ARRAY_COUNT(error))) {
-        menu_info(L"INFINITY", error);
+        menu_retry(L"CREATE PROFILE", error, menu_ask_name);
         return;
     }
     menu_show_created();
@@ -348,15 +360,15 @@ static void menu_name_typed(const wchar_t *name) {
 
 static void menu_ask_name(void) {
     line_start();
-    line_add(L"1 to 9 letters or digits, starting with a letter. It will read Name#");
+    line_add(L"1 to 20 letters or digits, starting with a letter. It will read Name#");
     line_add(azimuth_account_discriminator());
-    line_add(L". The profile starts from your offline progress.");
-    menu_keyboard(L"Online profile name", menu_line, 9, menu_name_typed);
+    line_add(L" (in the game, up to 15 characters of it). The profile starts from your offline progress.");
+    menu_keyboard(L"Online profile name", menu_line, 20, menu_name_typed);
 }
 
 /* Entrar com perfil: Name#12345, then the site key (a popup in between: a keyboard is not
    opened from another keyboard's completion). */
-static wchar_t menu_login_tag[20];
+static wchar_t menu_login_tag[32];
 
 static void menu_show_logged_in(void) {
     static const MenuButton restart[1] = {{L"Restart now", menu_restart}};
@@ -376,7 +388,7 @@ static void menu_key_typed(const wchar_t *key) {
         return;
     }
     if (!azimuth_account_log_in(menu_login_tag, key, error, ARRAY_COUNT(error))) {
-        menu_info(L"SIGN IN", error);
+        menu_retry(L"SIGN IN", error, menu_ask_key);
         return;
     }
     menu_show_logged_in();
@@ -409,7 +421,7 @@ static void menu_login_tag_typed(const wchar_t *tag) {
 
 static void menu_log_in(void) {
     menu_keyboard(L"Sign in",
-                  L"Enter the profile as Name#12345. The PC it is signed in on will be signed out.", 15,
+                  L"Enter the profile as Name#12345. The PC it is signed in on will be signed out.", 26,
                   menu_login_tag_typed);
 }
 
@@ -496,7 +508,10 @@ static void menu_friend_typed(const wchar_t *gamertag) {
     if (!gamertag[0]) {
         return;
     }
-    azimuth_account_add_friend(gamertag, message, ARRAY_COUNT(message));
+    if (!azimuth_account_add_friend(gamertag, message, ARRAY_COUNT(message))) {
+        menu_retry(L"ADD FRIEND", message, menu_add_friend);
+        return;
+    }
     menu_info(L"ADD FRIEND", message);
 }
 
@@ -504,7 +519,7 @@ static void menu_add_friend(void) {
     menu_keyboard(L"Add friend",
                   L"Enter your friend's profile as Name#12345. Once you both add each other, you become friends "
                   L"and rivals in ghost races.",
-                  15, menu_friend_typed);
+                  26, menu_friend_typed);
 }
 
 

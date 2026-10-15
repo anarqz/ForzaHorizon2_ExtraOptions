@@ -54,7 +54,7 @@ static int account_available;           /* fingerprint and paths ready: the menu
 static int account_active;              /* this session plays as the account */
 static wchar_t account_token[72];
 static wchar_t account_xuid[24];
-static wchar_t account_gamertag[24];
+static wchar_t account_gamertag[32]; /* Name#12345: up to 20 + 6 */
 static wchar_t account_web_key[24];
 static wchar_t account_online[4];
 static char account_discriminator[6];
@@ -140,10 +140,10 @@ static int json_string(const char *json, const char *key, char *out, size_t cap)
     return 0;
 }
 
-/* 1 to 9 ASCII letters or digits starting with a letter (the server checks it too). */
+/* 1 to 20 ASCII letters or digits starting with a letter (the server checks it too). */
 int azimuth_account_valid_name(const wchar_t *name) {
     size_t n = wide_len(name);
-    if (n < 1 || n > 9 || !((name[0] >= L'A' && name[0] <= L'Z') || (name[0] >= L'a' && name[0] <= L'z'))) {
+    if (n < 1 || n > 20 || !((name[0] >= L'A' && name[0] <= L'Z') || (name[0] >= L'a' && name[0] <= L'z'))) {
         return 0;
     }
     for (size_t i = 0; i < n; ++i) {
@@ -255,10 +255,27 @@ static void account_save(void) {
 
 /* Rewrites Azimuth's player-name std::wstring (ptr/inline buffer, size +0x10, capacity
    +0x18) in place; the gamertag fits whenever "Player 1"-style names already did. */
+/* The name the game shows: its gamertag fields hold 15 characters, so a longer Name#12345 is
+   the name alone (cut at 15), as the server sends it (Store::game_tag). */
+static void account_game_tag(wchar_t out[16]) {
+    size_t n = wide_len(account_gamertag), k = 0;
+    if (n <= 15) {
+        memory_copy(out, account_gamertag, (n + 1) * sizeof(wchar_t));
+        return;
+    }
+    while (k < 15 && account_gamertag[k] && account_gamertag[k] != L'#') {
+        out[k] = account_gamertag[k];
+        ++k;
+    }
+    out[k] = 0;
+}
+
 static int account_set_player_name(void) {
     unsigned char *string = account_host + account_offsets->account_name;
     unsigned long long capacity = 0;
-    size_t length = wide_len(account_gamertag);
+    wchar_t tag[16];
+    account_game_tag(tag);
+    size_t length = wide_len(tag);
     if (!memory_read(string + 0x18, &capacity, 8) || capacity < length || capacity > 4096) {
         return 0;
     }
@@ -266,7 +283,7 @@ static int account_set_player_name(void) {
     if (!text || !memory_is_writable(text, (length + 1) * sizeof(wchar_t))) {
         return 0;
     }
-    memory_copy(text, account_gamertag, (length + 1) * sizeof(wchar_t));
+    memory_copy(text, tag, (length + 1) * sizeof(wchar_t));
     *(unsigned long long *)(string + 0x10) = length;
     return 1;
 }
@@ -439,9 +456,9 @@ const wchar_t *azimuth_account_server(void) {
    account is kept with Online=1, so the next start plays as it. */
 int azimuth_account_register(const wchar_t *name, wchar_t *message, size_t cap) {
     static char reply[2048], body[256];
-    char ascii[16];
+    char ascii[24];
     if (!account_available || !azimuth_account_valid_name(name)) {
-        utf8_to_wide("The name must have 1 to 9 letters or digits and start with a letter.", message, cap);
+        utf8_to_wide("The name must have 1 to 20 letters or digits and start with a letter.", message, cap);
         return 0;
     }
     wide_to_ascii(name, ascii, sizeof(ascii));
