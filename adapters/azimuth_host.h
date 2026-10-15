@@ -27,6 +27,10 @@ void azimuth_apply_network(const wchar_t *directory);
 void azimuth_apply_economy_probe(unsigned char *game_image);
 void azimuth_apply_no_game_clips(unsigned char *game_image);
 void azimuth_apply_pad(void);
+/* azimuth_ini.c: FH2_ExtraOptions.ini gets ForzaInfinity's [Network] (or the template when there
+   is none) before it is read, keeping the player's settings; the log says what changed. */
+void azimuth_prepare_ini(const wchar_t *directory);
+void azimuth_log_ini(void);
 
 /* azimuth_net.c: the configured server, for the account module. */
 const wchar_t *azimuth_net_server_name(void);

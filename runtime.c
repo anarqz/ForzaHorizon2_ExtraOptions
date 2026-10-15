@@ -59,6 +59,9 @@ int runtime_initialize(unsigned char *game_image, const wchar_t *executable_path
     settings_defaults(&options);
     gamerpic_set_directory(settings_directory);
     log_reset();
+#ifdef FH2_AZIMUTH
+    azimuth_prepare_ini(settings_directory);
+#endif
     int initialized = settings_read(settings_directory, &options);
     if (initialized) {
         video_settings_load(settings_directory);
@@ -75,6 +78,7 @@ int runtime_initialize(unsigned char *game_image, const wchar_t *executable_path
 #ifdef FH2_AZIMUTH
     if (initialized && options.enabled) {
         log_set_directory(settings_directory);
+        azimuth_log_ini();
         azimuth_apply_livery_compatibility();
         azimuth_apply_save_compatibility(options.disable_azimuth_save_checksums);
         azimuth_apply_network(settings_directory);
