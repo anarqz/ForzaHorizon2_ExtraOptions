@@ -237,6 +237,8 @@ static const LangText lang_texts[] = {
      L"Hospedar"},
     {L"JOIN WORLD",
      L"ENTRAR NO MUNDO"},
+    {L"The car database changed after the game started. Restart the game to play online.",
+     L"O banco de carros mudou depois que o jogo abriu. Reinicie o jogo para jogar online."},
     {L"Your car database is different from the one of ",
      L"Seu banco de carros é diferente do de "},
     {L": different cars installed (imported or modified) keep you from playing together.",

@@ -96,6 +96,8 @@ HRESULT azimuth_net_make_hstring(const wchar_t *text, void **out);
    class's statics that Azimuth answered; it returns 1 if it did. */
 void azimuth_apply_freeroam(unsigned char *game_image, const wchar_t *directory, const wchar_t *executable);
 int azimuth_freeroam_filter(const wchar_t *name, const void *iid, void **out);
+/* Cuts the game's traffic to the world it is in (the car database changed). */
+void azimuth_freeroam_cut(void);
 /* azimuth_world.c: the world this player hosts (HOSPEDAR MUNDO). */
 void azimuth_world_set_directory(const wchar_t *directory);
 int azimuth_world_hosting(void);

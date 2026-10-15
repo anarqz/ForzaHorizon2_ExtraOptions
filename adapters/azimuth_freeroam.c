@@ -259,11 +259,21 @@ static int fr_base64_decode(const wchar_t *text, char *out, size_t capacity) {
 /* Windows' ws2_32, loaded on first use (the mod imports Kernel32 only). */
 
 typedef int(WINAPI *FrBindFn)(UINT_PTR, const void *, int);
+typedef int(WINAPI *FrSendToFn)(UINT_PTR, const char *, int, int, const void *, int);
+typedef int(WINAPI *FrWsaSendToFn)(UINT_PTR, void *, DWORD, DWORD *, DWORD, const void *, int, void *, void *);
 typedef int(WINAPI *FrSetOptionFn)(UINT_PTR, int, int, const char *, int);
 typedef int(WINAPI *FrPtonFn)(int, const wchar_t *, void *);
 
 static HMODULE fr_ws2;
 static FrBindFn fr_real_bind;
+static FrSendToFn fr_real_sendto;
+static FrWsaSendToFn fr_real_wsa_sendto;
+/* Set when the car database changed during the session (azimuth_world.c): from then on the
+   game's socket sends to [::1]:9, so the world stops hearing this player and drops it, and
+   the game, hearing nothing back, leaves the world. Only a copy of the destination is
+   changed; the game's buffers and its overlapped sends stay as they are. */
+static volatile LONG fr_cut;
+static const FrSockaddrIn6 fr_nowhere = {FR_AF_INET6, 0x0900, 0, {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1}, 0};
 static FrSetOptionFn fr_real_setsockopt;
 static FrPtonFn fr_real_pton;
 static volatile LONG fr_sockets_state; /* 0 not yet, 1 done, 2 gave up */
@@ -276,10 +286,12 @@ static int fr_load_ws2(void) {
             return 0;
         }
         fr_real_bind = (FrBindFn)(uintptr_t)GetProcAddress(fr_ws2, "bind");
+        fr_real_sendto = (FrSendToFn)(uintptr_t)GetProcAddress(fr_ws2, "sendto");
+        fr_real_wsa_sendto = (FrWsaSendToFn)(uintptr_t)GetProcAddress(fr_ws2, "WSASendTo");
         fr_real_setsockopt = (FrSetOptionFn)(uintptr_t)GetProcAddress(fr_ws2, "setsockopt");
         fr_real_pton = (FrPtonFn)(uintptr_t)GetProcAddress(fr_ws2, "InetPtonW");
     }
-    return fr_real_bind && fr_real_setsockopt && fr_real_pton;
+    return fr_real_bind && fr_real_setsockopt && fr_real_pton && fr_real_sendto && fr_real_wsa_sendto;
 }
 
 /* The game's socket is IPv6 ([::]:5100, the manifest's SecureConsoleSocket) and Windows makes
@@ -301,7 +313,35 @@ static int WINAPI fr_bind(UINT_PTR socket, const void *address, int length) {
     return result;
 }
 
-/* Points every ws2_32 import of the game at Windows' ws2_32 (bind at fr_bind). Returns 1 when
+static int fr_is_cut(UINT_PTR socket) {
+    return fr_cut && socket == fr_game_socket;
+}
+
+static int WINAPI fr_sendto(UINT_PTR socket, const char *data, int size, int flags, const void *to, int to_size) {
+    if (fr_is_cut(socket)) {
+        return fr_real_sendto(socket, data, size, flags, &fr_nowhere, sizeof(fr_nowhere));
+    }
+    return fr_real_sendto(socket, data, size, flags, to, to_size);
+}
+
+static int WINAPI fr_wsa_sendto(UINT_PTR socket, void *buffers, DWORD count, DWORD *sent, DWORD flags,
+                                const void *to, int to_size, void *overlapped, void *completion) {
+    if (fr_is_cut(socket)) {
+        return fr_real_wsa_sendto(socket, buffers, count, sent, flags, &fr_nowhere, sizeof(fr_nowhere), overlapped,
+                                  completion);
+    }
+    return fr_real_wsa_sendto(socket, buffers, count, sent, flags, to, to_size, overlapped, completion);
+}
+
+/* Cuts this game off the world it is in (see fr_cut). */
+void azimuth_freeroam_cut(void) {
+    if (!InterlockedExchange(&fr_cut, 1)) {
+        fr_log("the game's world traffic is cut (the car database changed).");
+    }
+}
+
+/* Points every ws2_32 import of the game at Windows' ws2_32 (bind at fr_bind, sendto and
+   WSASendTo through fr_sendto / fr_wsa_sendto). Returns 1 when
    done, 0 while Azimuth has not bound the imports yet, -1 when it cannot be done. */
 static int fr_install_sockets(void) {
     if (!fr_load_ws2()) {
@@ -339,6 +379,10 @@ static int fr_install_sockets(void) {
             }
             if (real == (void *)(uintptr_t)fr_real_bind) {
                 real = (void *)(uintptr_t)fr_bind;
+            } else if (real == (void *)(uintptr_t)fr_real_sendto) {
+                real = (void *)(uintptr_t)fr_sendto;
+            } else if (real == (void *)(uintptr_t)fr_real_wsa_sendto) {
+                real = (void *)(uintptr_t)fr_wsa_sendto;
             }
             if (table[k] == real) {
                 continue;

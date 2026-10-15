@@ -53,3 +53,5 @@ EXPORTS
     Sleep
     TerminateProcess
     GetExitCodeProcess
+    CreatePipe
+    SetHandleInformation

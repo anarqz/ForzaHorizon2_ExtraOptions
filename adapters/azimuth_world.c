@@ -31,8 +31,12 @@
 
 static wchar_t world_directory[PATH_CAPACITY];
 static HANDLE world_job, world_process;
+/* The write end of the relay's stdin: "kick <xuid>" lines (the server's kick list). */
+static HANDLE world_relay_input;
 /* world_generation: each world's heartbeat thread stops once it changes. */
 static volatile LONG world_on, world_generation, world_listed;
+/* The car database changed during the session (world_car_db_tampered). */
+static volatile LONG world_car_db_changed;
 static SRWLOCK world_lock = SRWLOCK_INIT;
 
 /* What server.cfg says (UTF-8 values, as they go into the announcement). */
@@ -367,6 +371,37 @@ static const wchar_t *world_token_header(void) {
     return header;
 }
 
+/* The server's "kick":["<xuid>",...] (players whose car database changed, later the host's
+   bans) go to the relay as "kick <xuid>" lines on its stdin: only this PC can reach it. XUIDs
+   are digits only; anything else is skipped. */
+static void world_pass_kicks(const char *reply) {
+    const char *at = text_find(reply, text_length(reply), "\"kick\":[");
+    if (!at || !world_relay_input) {
+        return;
+    }
+    for (at += 8; *at && *at != ']';) {
+        char line[40];
+        size_t n = 0;
+        while (*at && *at != ']' && (*at < '0' || *at > '9')) {
+            ++at;
+        }
+        if (*at < '0' || *at > '9') {
+            break;
+        }
+        line[n++] = 'k', line[n++] = 'i', line[n++] = 'c', line[n++] = 'k', line[n++] = ' ';
+        while (*at >= '0' && *at <= '9' && n < 30) {
+            line[n++] = *at++;
+        }
+        while (*at >= '0' && *at <= '9') {
+            ++at; /* longer than any xuid: not ours */
+        }
+        line[n++] = '\n';
+        DWORD written = 0;
+        WriteFile(world_relay_input, line, (DWORD)n, &written, 0);
+        log_append("WORLD: the server asked to kick a player; passed to the relay.\r\n");
+    }
+}
+
 /* POST /infinity/v1/worlds (start and heartbeat). Returns the HTTP status. */
 static DWORD world_announce(void) {
     static char body[1024], reply[1024];
@@ -395,6 +430,7 @@ static DWORD world_announce(void) {
     ReleaseSRWLockExclusive(&world_lock);
     DWORD status = azimuth_net_call(L"POST", L"/infinity/v1/worlds", world_token_header(), body, reply, sizeof(reply));
     if (status == 200) {
+        world_pass_kicks(reply);
         /* "players": n */
         const char *p = text_find(reply, text_length(reply), "\"players\":");
         if (p) {
@@ -495,6 +531,10 @@ static int world_open(int listed, const wchar_t **why) {
         *why = L"Hosting a world needs your online profile.";
         return 0;
     }
+    if (world_car_db_changed) {
+        *why = L"The car database changed after the game started. Restart the game to play online.";
+        return 0;
+    }
     if (!path_join(exe, world_directory, WORLD_EXE_NAME) || GetFileAttributesW(exe) == INVALID_FILE_ATTRIBUTES) {
         *why = L"dedicated_server.exe is missing from the game's data\\bin folder. Reinstall ForzaInfinity.";
         return 0;
@@ -527,17 +567,28 @@ static int world_open(int listed, const wchar_t **why) {
         log_file = CreateFileW(log_path, GENERIC_WRITE, FILE_SHARE_READ, &inherit, CREATE_ALWAYS,
                                FILE_ATTRIBUTE_NORMAL, 0);
     }
-    startup.cb = sizeof(startup);
-    startup.dwFlags = STARTF_USESHOWWINDOW;
-    startup.wShowWindow = SW_HIDE;
-    if (log_file != INVALID_HANDLE_VALUE) {
-        startup.dwFlags |= STARTF_USESTDHANDLES;
-        startup.hStdInput = 0;
-        startup.hStdOutput = log_file;
-        startup.hStdError = log_file;
+    /* the relay's stdin: a pipe only this process writes to (kick lines) */
+    HANDLE input_read = 0, input_write = 0;
+    if (CreatePipe(&input_read, &input_write, &inherit, 0)) {
+        SetHandleInformation(input_write, HANDLE_FLAG_INHERIT, 0);
+    } else {
+        input_read = input_write = 0;
     }
-    BOOL created = CreateProcessW(exe, command, 0, 0, log_file != INVALID_HANDLE_VALUE, CREATE_NO_WINDOW | CREATE_SUSPENDED,
-                                  0, world_directory, &startup, &process);
+    startup.cb = sizeof(startup);
+    startup.dwFlags = STARTF_USESHOWWINDOW | STARTF_USESTDHANDLES;
+    startup.wShowWindow = SW_HIDE;
+    startup.hStdInput = input_read;
+    startup.hStdOutput = log_file != INVALID_HANDLE_VALUE ? log_file : 0;
+    startup.hStdError = log_file != INVALID_HANDLE_VALUE ? log_file : 0;
+    BOOL created = CreateProcessW(exe, command, 0, 0, TRUE, CREATE_NO_WINDOW | CREATE_SUSPENDED, 0, world_directory,
+                                  &startup, &process);
+    if (input_read) {
+        CloseHandle(input_read);
+    }
+    if (!created && input_write) {
+        CloseHandle(input_write);
+        input_write = 0;
+    }
     if (log_file != INVALID_HANDLE_VALUE) {
         CloseHandle(log_file);
     }
@@ -552,12 +603,19 @@ static int world_open(int listed, const wchar_t **why) {
         TerminateProcess(process.hProcess, 1);
         CloseHandle(process.hThread);
         CloseHandle(process.hProcess);
+        if (input_write) {
+            CloseHandle(input_write);
+        }
         *why = L"The world could not be started (job object).";
         return 0;
     }
     ResumeThread(process.hThread);
     CloseHandle(process.hThread);
     world_process = process.hProcess;
+    if (world_relay_input) {
+        CloseHandle(world_relay_input);
+    }
+    world_relay_input = input_write;
     world_players = 1;
     InterlockedExchange(&world_listed, listed);
     InterlockedExchange(&world_on, 1);
@@ -640,20 +698,23 @@ void azimuth_world_on_request(const wchar_t *method, const wchar_t *url, const u
 static wchar_t world_car_db_path[PATH_CAPACITY];
 static wchar_t world_car_db_header[96];
 static volatile LONG world_car_db_ready;
+static unsigned char world_car_db_digest[32];
 
-static DWORD WINAPI world_hash_car_db(void *unused) {
-    (void)unused;
+#define WORLD_REHASH_MS 30000u
+
+static void world_car_db_tampered(void);
+
+/* SHA-256 of the car database; 0 when it cannot be read. */
+static int world_digest_car_db(unsigned char digest[32]) {
     unsigned char *chunk = HeapAlloc(GetProcessHeap(), 0, WORLD_HASH_CHUNK);
     HANDLE file = CreateFileW(world_car_db_path, GENERIC_READ, FILE_SHARE_READ, 0, OPEN_EXISTING,
                               FILE_ATTRIBUTE_NORMAL, 0);
     if (!chunk || file == INVALID_HANDLE_VALUE) {
-        log_append("WORLD: the car database could not be read; worlds will not check it.\r\n");
         if (chunk) HeapFree(GetProcessHeap(), 0, chunk);
         if (file != INVALID_HANDLE_VALUE) CloseHandle(file);
         return 0;
     }
     Sha256Context hash;
-    unsigned char digest[32];
     DWORD got = 0;
     sha256_initialize(&hash);
     while (ReadFile(file, chunk, WORLD_HASH_CHUNK, &got, 0) && got) {
@@ -662,6 +723,22 @@ static DWORD WINAPI world_hash_car_db(void *unused) {
     CloseHandle(file);
     HeapFree(GetProcessHeap(), 0, chunk);
     sha256_finalize(&hash, digest);
+    return 1;
+}
+
+/* Hashed when the game starts, then again every 30 s: a database changed during the session
+   (cars swapped for an advantage) cuts the player off the world and tells the server
+   (world_car_db_tampered). A file that cannot be read for a moment is not a change. A
+   modified client can lie about all of this: it only stops honest clients from switching
+   cars mid-session, and the world's own checks are the relay's. */
+static DWORD WINAPI world_hash_car_db(void *unused) {
+    (void)unused;
+    unsigned char digest[32];
+    if (!world_digest_car_db(digest)) {
+        log_append("WORLD: the car database could not be read; worlds will not check it.\r\n");
+        return 0;
+    }
+    memory_copy(world_car_db_digest, digest, sizeof(digest));
     static const wchar_t prefix[] = L"X-Fh2-CarDb: ";
     static const char hex[] = "0123456789abcdef";
     size_t n = 0;
@@ -682,7 +759,13 @@ static DWORD WINAPI world_hash_car_db(void *unused) {
     }
     world_add(&t, "... (worlds only with the same cars).\r\n");
     log_append(line);
-    return 0;
+    for (;;) {
+        Sleep(WORLD_REHASH_MS);
+        if (world_digest_car_db(digest) && !memory_equal(digest, world_car_db_digest, sizeof(digest))) {
+            world_car_db_tampered();
+            return 0;
+        }
+    }
 }
 
 /* `executable` is the game's forza_durango_release_final.exe in its Mount folder. */
@@ -708,6 +791,26 @@ void azimuth_world_hash_car_db(const wchar_t *executable) {
 /* "X-Fh2-CarDb: <sha-256>", or 0 until it is known. */
 const wchar_t *azimuth_world_car_db_header(void) {
     return world_car_db_ready ? world_car_db_header : 0;
+}
+
+/* The car database changed during the session: off the world, and the server is told (it
+   drops this player from the world it is in and asks that world's host to kick it). The
+   X-Fh2-CarDb header now says "changed", so the server keeps this game out of every world
+   until it restarts. */
+static void world_car_db_tampered(void) {
+    static char reply[256];
+    if (InterlockedExchange(&world_car_db_changed, 1)) {
+        return;
+    }
+    log_append("WORLD: the car database changed during the session; this game leaves the online world.\r\n");
+    static const wchar_t changed[] = L"X-Fh2-CarDb: changed";
+    memory_copy(world_car_db_header, changed, sizeof(changed));
+    azimuth_freeroam_cut();
+    if (world_on) {
+        world_end("the car database changed");
+    }
+    azimuth_net_call(L"POST", L"/infinity/v1/worlds/left", world_token_header(), "{\"reason\":\"cars\"}", reply,
+                     sizeof(reply));
 }
 
 /* ------------------------------------------------------------ joining a world */
