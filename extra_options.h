@@ -6,7 +6,7 @@
 #include <windows.h>
 
 #define MOD_NAME "Forza Horizon 2 Extra Options"
-#define MOD_VERSION "0.2.74+fh2online.43"
+#define MOD_VERSION "0.2.74+fh2online.45"
 #define MOD_WIDE_TEXT(text) L##text
 #define MOD_WIDE(text) MOD_WIDE_TEXT(text)
 #define MOD_VERSION_WIDE MOD_WIDE(MOD_VERSION)

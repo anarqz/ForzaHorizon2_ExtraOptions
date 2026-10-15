@@ -27,6 +27,10 @@ void azimuth_apply_network(const wchar_t *directory);
 void azimuth_apply_economy_probe(unsigned char *game_image);
 void azimuth_apply_no_game_clips(unsigned char *game_image);
 void azimuth_apply_pad(void);
+/* azimuth_ini.c: FH2_ExtraOptions.ini gets ForzaInfinity's [Network] (or the template when there
+   is none) before it is read, keeping the player's settings; the log says what changed. */
+void azimuth_prepare_ini(const wchar_t *directory);
+void azimuth_log_ini(void);
 
 /* azimuth_net.c: the configured server, for the account module. */
 const wchar_t *azimuth_net_server_name(void);
@@ -101,6 +105,12 @@ int azimuth_world_start(const wchar_t **why);
 void azimuth_world_stop(void);
 void azimuth_world_describe(char *visibility, size_t visibility_capacity, int *has_password,
                             unsigned *max_players, unsigned *port);
+/* azimuth_expansions.c: Storm Island for profiles that have it (the server's /me lists it). */
+void azimuth_apply_expansions(unsigned char *game_image);
+void azimuth_expansions_granted(void);
+/* azimuth_account.c: whether the online profile has Storm Island (the last reply, kept in the
+   accounts file). */
+int azimuth_account_storm_island(void);
 
 /* azimuth_online_menu.c: Settings > INFINITY. */
 void azimuth_apply_online_menu(unsigned char *game_image);
