@@ -1243,6 +1243,7 @@ void azimuth_apply_freeroam(unsigned char *game_image, const wchar_t *directory)
     if (!path_join(ini, directory, MOD_INI_NAME)) {
         return;
     }
+    azimuth_world_set_directory(directory);
     GetPrivateProfileStringW(L"FreeRoam", L"Enabled", L"0", value, ARRAY_COUNT(value), ini);
     fr_enabled = value[0] == L'1';
     if (!fr_enabled) {

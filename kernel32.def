@@ -41,3 +41,15 @@ EXPORTS
     FlushFileBuffers
     MoveFileExW
     DeleteFileW
+    CreateProcessW
+    CreateJobObjectW
+    SetInformationJobObject
+    AssignProcessToJobObject
+    TerminateJobObject
+    ResumeThread
+    CreateEventW
+    SetEvent
+    WaitForSingleObject
+    Sleep
+    TerminateProcess
+    GetExitCodeProcess

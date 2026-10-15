@@ -106,6 +106,7 @@ def build(compiler, output, directory, options):
             "adapters/azimuth_offsets.c",
             "adapters/azimuth_net.c",
             "adapters/azimuth_freeroam.c",
+            "adapters/azimuth_world.c",
             "adapters/azimuth_pad.c",
             "adapters/azimuth_account.c",
             "adapters/azimuth_codec.c",

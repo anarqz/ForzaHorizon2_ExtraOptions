@@ -540,6 +540,61 @@ static void menu_add_friend(void) {
 }
 
 
+/* HOSPEDAR MUNDO / ENCERRAR MUNDO (azimuth_world.c). */
+static void menu_world_stop(void) {
+    azimuth_world_stop();
+    menu_info(L"WORLD CLOSED", L"Your world is closed. The players in it go back to their own free roam.");
+}
+
+static void menu_world_status(void) {
+    char visibility[16];
+    int has_password = 0;
+    unsigned max_players = 0, port = 0;
+    static wchar_t number[16];
+    azimuth_world_describe(visibility, sizeof(visibility), &has_password, &max_players, &port);
+    line_start();
+    line_add(L"Your world is open. Go to FREE ROAM ONLINE to enter it; the players the server sends you meet you there.\n\nPlayers: ");
+    unsigned v = azimuth_world_players(), n = 0;
+    wchar_t digits[12];
+    do {
+        digits[n++] = (wchar_t)(L'0' + v % 10);
+        v /= 10;
+    } while (v);
+    for (unsigned i = 0; i < n; ++i) number[i] = digits[n - 1 - i];
+    number[n] = L'/';
+    v = max_players;
+    unsigned m = 0;
+    do {
+        digits[m++] = (wchar_t)(L'0' + v % 10);
+        v /= 10;
+    } while (v);
+    for (unsigned i = 0; i < m; ++i) number[n + 1 + i] = digits[m - 1 - i];
+    number[n + 1 + m] = 0;
+    menu_line_raw(number);
+    line_add(has_password ? L"\nWith a password: it is not on the list; friends join it from your player card."
+             : visibility[0] == 'f' ? L"\nFriends only."
+             : visibility[0] == 'o' ? L"\nPrivate: nobody finds it."
+                                    : L"\nOn the list for everybody.");
+    line_add(L"\n\nSettings (name, password, players, friends only): ");
+    menu_line_raw(azimuth_world_config_path());
+    line_add(L"\nThey apply the next time you open the world.");
+    static const MenuButton buttons[2] = {{L"Close world", menu_world_stop}, {L"OK", menu_nothing}};
+    menu_popup(L"HOST WORLD", menu_line, buttons, 2);
+}
+
+static void menu_world(void) {
+    if (azimuth_world_hosting()) {
+        menu_world_status();
+        return;
+    }
+    const wchar_t *why = L"";
+    if (azimuth_world_start(&why)) {
+        menu_world_status();
+    } else {
+        menu_info(L"HOST WORLD", why);
+    }
+}
+
 static void menu_test_connection(void) {
     static wchar_t report[600];
     azimuth_account_test(report, ARRAY_COUNT(report));
@@ -645,9 +700,10 @@ const InfinityTile *azimuth_infinity_tiles(void) {
         menu_set_tile(1, "ADD FRIEND", "PauseMenuTileBackgrounds/MyRivals.png", 1, menu_add_friend);
         menu_set_tile(2, "TEST CONNECTION", "PauseMenuTileBackgrounds/OnlineFreeroam.png", 1, menu_test_connection);
         menu_set_tile(3, "SITE KEY", "Icons/TiledMenus/Options.png", 0, menu_show_key);
-        menu_set_tile(4, "SWITCH PROFILE", "Icons/TiledMenus/Garage.png", 0, menu_log_in);
+        menu_set_tile(4, azimuth_world_hosting() ? "WORLD OPEN" : "HOST WORLD", "Icons/TiledMenus/Garage.png", 0,
+                      menu_world);
         menu_set_tile(5, "ABOUT", "Icons/TiledMenus/TeamCredits.png", 0, menu_about);
-        menu_set_tile(6, "LEAVE INFINITY", "Icons/TiledMenus/Difficulty.png", 0, menu_confirm_leave);
+        menu_set_tile(6, "MORE", "Icons/TiledMenus/Difficulty.png", 0, menu_more);
     } else if (state == 1) {
         menu_set_tile(0, "PROFILE", "Icons/TiledMenus/Autoshow.png", 0, menu_profile);
         menu_set_tile(1, "JOIN AND RESTART", "PauseMenuTileBackgrounds/OnlineRoadtrip.png", 1, menu_join);

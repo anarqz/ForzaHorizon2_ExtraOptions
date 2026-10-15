@@ -92,6 +92,15 @@ HRESULT azimuth_net_make_hstring(const wchar_t *text, void **out);
    class's statics that Azimuth answered; it returns 1 if it did. */
 void azimuth_apply_freeroam(unsigned char *game_image, const wchar_t *directory);
 int azimuth_freeroam_filter(const wchar_t *name, const void *iid, void **out);
+/* azimuth_world.c: the world this player hosts (HOSPEDAR MUNDO). */
+void azimuth_world_set_directory(const wchar_t *directory);
+int azimuth_world_hosting(void);
+unsigned azimuth_world_players(void);
+const wchar_t *azimuth_world_config_path(void);
+int azimuth_world_start(const wchar_t **why);
+void azimuth_world_stop(void);
+void azimuth_world_describe(char *visibility, size_t visibility_capacity, int *has_password,
+                            unsigned *max_players, unsigned *port);
 
 /* azimuth_online_menu.c: Settings > INFINITY. */
 void azimuth_apply_online_menu(unsigned char *game_image);
