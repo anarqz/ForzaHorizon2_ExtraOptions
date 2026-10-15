@@ -3037,6 +3037,9 @@ static HRESULT net_get_activation_factory(const wchar_t *name, const void *iid, 
         net_wide_equal(name, L"Windows.Networking.Connectivity.NetworkInformation")) {
         net_netinfo_filter(out);
     }
+    if (SUCCEEDED(result) && *out) {
+        azimuth_freeroam_filter(name, iid, out);
+    }
     if (net_trace_first(name, result)) {
         Buffer line = {0};
         if (buffer_append_text(&line, "WINRT: activate ") &&
@@ -3195,6 +3198,9 @@ static HRESULT net_make_hstring(const wchar_t *text, void **out) {
     }
     NetCreateStringFn create = (NetCreateStringFn)(uintptr_t)(net_azimuth_base + net_offsets->hstring_create);
     return create(text, (unsigned)wide_length(text), out);
+}
+HRESULT azimuth_net_make_hstring(const wchar_t *text, void **out) {
+    return net_azimuth_base && net_offsets ? net_make_hstring(text, out) : E_FAIL;
 }
 static HRESULT STDMETHODCALLTYPE net_result_get_0(NetTokenResult *self, void **out) {
     (void)self;

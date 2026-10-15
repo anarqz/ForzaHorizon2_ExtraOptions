@@ -86,6 +86,13 @@ const wchar_t *azimuth_update_text(void);
 void azimuth_account_test(wchar_t *out, size_t cap);
 int azimuth_account_banner(char *out, size_t cap, const char **color);
 
+/* azimuth_net.c: an HSTRING made by Azimuth's WindowsCreateString. */
+HRESULT azimuth_net_make_hstring(const wchar_t *text, void **out);
+/* azimuth_freeroam.c: free roam online ([FreeRoam] Enabled=1). The filter may wrap a WinRT
+   class's statics that Azimuth answered; it returns 1 if it did. */
+void azimuth_apply_freeroam(unsigned char *game_image, const wchar_t *directory);
+int azimuth_freeroam_filter(const wchar_t *name, const void *iid, void **out);
+
 /* azimuth_online_menu.c: Settings > INFINITY. */
 void azimuth_apply_online_menu(unsigned char *game_image);
 /* One tile of the INFINITY screen: heading (UTF-8, NULL = no tile), image or icon under
