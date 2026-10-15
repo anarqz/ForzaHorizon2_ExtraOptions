@@ -717,6 +717,165 @@ static void menu_click(void *page) {
     }
 }
 
+/* ------------------------------------------------------- player actions */
+
+/* The game's PLAYER ACTIONS list (Lobby:IDS_UserActionsTitle; leaderboards, club members,
+   friends...): FUN_140e13be0 builds it with FUN_140dfec20(page, &list, &item) per action,
+   each item made by FUN_140df3730(&item, &id, &text) (id at item+0x68, a bit; added only when
+   the page's mask at +0x4e0 allows it). The player is (*(page+0x4d0))+0x78, whose vtable
+   +0x38 gives the XUID. A selection runs FUN_140e080a0(page, flag), which reads the chosen
+   item from the list at page+0x4a0 (FUN_140e25a80) and ignores ids it does not know.
+   Right after SHOW GAMERCARD (id 1, the first) one more item goes in: ADD FRIEND, REMOVE
+   FRIEND, CANCEL or ACCEPT FRIEND REQUEST, from the server's answer; choosing it asks the
+   server again and adds or removes. */
+#define ACTIONS_ADD_RVA 0xdfec20u
+#define ACTIONS_ITEM_RVA 0xdf3730u
+#define ACTIONS_SELECTED_RVA 0xe080a0u
+#define ACTIONS_CURRENT_RVA 0xe25a80u
+#define GAME_OBJECT_FREE_RVA 0x257730u
+#define ACTION_FRIEND 0x40000000
+
+static const unsigned char actions_add_bytes[15] = {0x4c, 0x89, 0x44, 0x24, 0x18, 0x48, 0x89, 0x54,
+                                                    0x24, 0x10, 0x57, 0x48, 0x83, 0xec, 0x30};
+static const unsigned char actions_selected_bytes[15] = {0x48, 0x89, 0x5c, 0x24, 0x10, 0x48, 0x89, 0x74,
+                                                         0x24, 0x18, 0x57, 0x48, 0x83, 0xec, 0x20};
+
+typedef void (*ActionsAddFn)(void *, void **, void **);
+typedef void **(*ActionsItemFn)(void **, const int *, void **);
+typedef void (*ActionsSelectedFn)(void *, char);
+typedef void **(*ActionsCurrentFn)(void *, void **);
+typedef void (*ActionsInsertFn)(void *, unsigned, void *, void *, long long);
+typedef void (*GameObjectFreeFn)(void *);
+typedef unsigned long long (*PlayerXuidFn)(void *);
+
+static ActionsAddFn actions_add_original;
+static ActionsSelectedFn actions_selected_original;
+static unsigned long long actions_xuid;
+
+/* The game's reference count (+0x10); the object goes when it reaches 0. */
+static void game_object_release(void *object) {
+    if (object && InterlockedDecrement((volatile LONG *)((unsigned char *)object + 0x10)) == 0) {
+        ((GameObjectFreeFn)(uintptr_t)(menu_game + GAME_OBJECT_FREE_RVA))(object);
+    }
+}
+
+static unsigned long long actions_player(void *page) {
+    unsigned char *holder = *(unsigned char **)((unsigned char *)page + 0x4d0);
+    void **player = holder ? *(void ***)(holder + 0x78) : 0;
+    return player ? ((PlayerXuidFn)(*(void ***)player)[0x38 / sizeof(void *)])(player) : 0;
+}
+
+static void actions_add(void *page, void **list, void **item) {
+    void *collection = list ? *list : 0;
+    int id = item && *item ? *(int *)((unsigned char *)*item + 0x68) : 0;
+    unsigned mask = *(unsigned *)((unsigned char *)page + 0x4e0);
+    actions_add_original(page, list, item);
+    if (id != 1 || !(mask & 1) || !collection) {
+        return;
+    }
+    unsigned long long xuid = actions_player(page);
+    int state = azimuth_account_friend_state(xuid);
+    if (state < 0) {
+        return; /* offline, no profile, or the player is not on this server */
+    }
+    actions_xuid = xuid;
+    MenuText *text = menu_text(state == 2   ? L"REMOVE FRIEND"
+                               : state == 1 ? L"CANCEL FRIEND REQUEST"
+                               : state == 3 ? L"ACCEPT FRIEND REQUEST"
+                                            : L"ADD FRIEND");
+    if (!text) {
+        return;
+    }
+    void *made = 0;
+    int action = ACTION_FRIEND;
+    ((ActionsItemFn)(uintptr_t)(menu_game + ACTIONS_ITEM_RVA))(&made, &action, (void **)&text);
+    menu_text_release(text);
+    if (!made) {
+        return;
+    }
+    /* as FUN_140dfec20 adds it, without the page's mask */
+    void **table = *(void ***)collection;
+    unsigned count = *(unsigned *)(*(unsigned char **)((unsigned char *)collection + 0x50) + 0x30);
+    ((ActionsInsertFn)table[0x40 / sizeof(void *)])(collection, count, made, table, -2);
+    game_object_release(made);
+}
+
+static void actions_friend(void) {
+    static wchar_t message[400];
+    int state = azimuth_account_friend_state(actions_xuid); /* as it is now, not when the list opened */
+    if (state < 0) {
+        menu_retry(L"FRIENDS", L"The server did not answer.", actions_friend);
+        return;
+    }
+    int add = state == 0 || state == 3;
+    if (!azimuth_account_friend_change(actions_xuid, add, message, ARRAY_COUNT(message))) {
+        menu_retry(add ? L"ADD FRIEND" : L"REMOVE FRIEND", message, actions_friend);
+        return;
+    }
+    menu_info(add ? L"ADD FRIEND" : L"REMOVE FRIEND", message);
+}
+
+static void actions_selected(void *page, char flag) {
+    void *list = *(void **)((unsigned char *)page + 0x4a0), *current = 0;
+    if (list) {
+        ((ActionsCurrentFn)(uintptr_t)(menu_game + ACTIONS_CURRENT_RVA))(list, &current);
+    }
+    int id = current ? *(int *)((unsigned char *)current + 0x68) : 0;
+    game_object_release(current);
+    if (id != ACTION_FRIEND) {
+        actions_selected_original(page, flag);
+        return;
+    }
+    menu_page = page;
+    actions_xuid = actions_player(page);
+    actions_friend();
+}
+
+/* A 14-byte jump at game+rva to `hook` when its first `n` bytes (whole instructions, no
+   rip-relative ones) are `expected`; *original then runs those bytes and jumps back. */
+static int menu_detour(unsigned rva, const unsigned char *expected, unsigned n, void *hook, void **original) {
+    unsigned char *target = menu_game + rva, current[16];
+    if (n < 14 || n > sizeof(current) || !memory_read(target, current, n) || !memory_equal(current, expected, n)) {
+        return 0;
+    }
+    unsigned char *trampoline = VirtualAlloc(0, 64, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
+    if (!trampoline) {
+        return 0;
+    }
+    uintptr_t back = (uintptr_t)(target + n), to = (uintptr_t)hook;
+    unsigned char jump[14] = {0xff, 0x25, 0, 0, 0, 0};
+    memory_copy(trampoline, current, n);
+    memory_copy(trampoline + n, jump, 6);
+    memory_copy(trampoline + n + 6, &back, sizeof(back));
+    *original = trampoline;
+    memory_copy(jump + 6, &to, sizeof(to));
+    DWORD old_protection, ignored;
+    if (!VirtualProtect(target, sizeof(jump), PAGE_EXECUTE_READWRITE, &old_protection)) {
+        return 0;
+    }
+    memory_copy(target, jump, sizeof(jump));
+    FlushInstructionCache(GetCurrentProcess(), target, sizeof(jump));
+    VirtualProtect(target, sizeof(jump), old_protection, &ignored);
+    return 1;
+}
+
+static void menu_install_player_actions(void) {
+    void *add = 0, *selected = 0;
+    if (!menu_detour(ACTIONS_SELECTED_RVA, actions_selected_bytes, sizeof(actions_selected_bytes),
+                     (void *)(uintptr_t)actions_selected, &selected)) {
+        log_append("MENU: player actions code not as expected; no friend action.\r\n");
+        return;
+    }
+    actions_selected_original = (ActionsSelectedFn)(uintptr_t)selected;
+    if (!menu_detour(ACTIONS_ADD_RVA, actions_add_bytes, sizeof(actions_add_bytes), (void *)(uintptr_t)actions_add,
+                     &add)) {
+        log_append("MENU: player actions list not as expected; no friend action.\r\n");
+        return;
+    }
+    actions_add_original = (ActionsAddFn)(uintptr_t)add;
+    log_append("MENU: player actions offer add / remove friend.\r\n");
+}
+
 /* ------------------------------------------------------------- install */
 
 /* A named element of a page, as FUN_140dc6980 looks one up: a name object built by
@@ -855,4 +1014,5 @@ void azimuth_apply_online_menu(unsigned char *game_image) {
         menu_infinity_screen_off = 1;
     }
     log_append("MENU: INFINITY menu bound in Settings.\r\n");
+    menu_install_player_actions();
 }

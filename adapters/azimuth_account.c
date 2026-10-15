@@ -711,6 +711,63 @@ int azimuth_account_new_web_key(wchar_t *message, size_t cap) {
 
 /* Asks the server to befriend "Name#12345"; `message` is the server's answer for the
    player either way (friends once both added each other). */
+/* {"xuid":"<decimal>"} */
+static void account_xuid_body(unsigned long long xuid, char *body, size_t cap) {
+    char digits[24];
+    int n = 0;
+    do {
+        digits[n++] = (char)('0' + xuid % 10);
+        xuid /= 10;
+    } while (xuid && n < 23);
+    body[0] = 0;
+    text_add(body, cap, "{\"xuid\":\"");
+    size_t at = text_length(body);
+    while (n && at + 1 < cap) {
+        body[at++] = digits[--n];
+    }
+    body[at] = 0;
+    text_add(body, cap, "\"}");
+}
+
+/* Where this profile stands with the player `xuid` (the game's player actions): 2 friends,
+   1 asked them, 3 they asked, 0 neither, -1 unknown (offline, no profile, no answer). Asks
+   with a short wait: the menu is open meanwhile. */
+int azimuth_account_friend_state(unsigned long long xuid) {
+    static char reply[512], body[64];
+    char state[16];
+    if (!account_active || !account_token[0] || !xuid) {
+        return -1;
+    }
+    account_xuid_body(xuid, body, sizeof(body));
+    DWORD status = azimuth_net_call_quick(L"POST", L"/infinity/v1/friends/status", account_token_header(), body, reply,
+                                          sizeof(reply), 1500);
+    if (status != 200 || !json_string(reply, "state", state, sizeof(state))) {
+        return -1;
+    }
+    return memory_equal(state, "friends", 8) ? 2 : memory_equal(state, "requested", 10) ? 1
+                                               : memory_equal(state, "incoming", 9)    ? 3
+                                                                                       : 0;
+}
+
+/* Adds (add) or removes the friend `xuid`; the server's answer (or why it failed) in
+   `message`. Returns 1 when the server took it. */
+int azimuth_account_friend_change(unsigned long long xuid, int add, wchar_t *message, size_t cap) {
+    static char reply[1024], body[64], text[400];
+    if (!account_active || !account_token[0]) {
+        utf8_to_wide("Friends need your online profile: create one or sign in in Settings > Infinity.", message, cap);
+        return 0;
+    }
+    account_xuid_body(xuid, body, sizeof(body));
+    DWORD status = azimuth_net_call(L"POST", add ? L"/infinity/v1/friends" : L"/infinity/v1/friends/remove",
+                                    account_token_header(), body, reply, sizeof(reply));
+    if (status == 200 && json_string(reply, "message", text, sizeof(text)) && text[0]) {
+        utf8_to_wide(text, message, cap);
+        return 1;
+    }
+    account_error(status, reply, message, cap);
+    return 0;
+}
+
 int azimuth_account_add_friend(const wchar_t *gamertag, wchar_t *message, size_t cap) {
     static char reply[1024], body[96], text[400];
     char tag[32];

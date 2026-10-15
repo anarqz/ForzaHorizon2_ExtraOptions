@@ -931,6 +931,18 @@ DWORD azimuth_net_request(const wchar_t *method, const wchar_t *path, const wcha
     return net_request(method, path, headers, content_type, body, body_size, out, capacity, received, 0);
 }
 
+/* As azimuth_net_call, giving up after timeout_ms (a menu waiting on the answer). */
+DWORD azimuth_net_call_quick(const wchar_t *method, const wchar_t *path, const wchar_t *extra_header,
+                             const char *body, char *out, size_t capacity, int timeout_ms) {
+    size_t used = 0;
+    DWORD status = net_request(method, path, extra_header, L"application/json", body, body ? text_length(body) : 0, out,
+                               capacity ? capacity - 1 : 0, &used, timeout_ms);
+    if (out && capacity) {
+        out[used] = 0;
+    }
+    return status;
+}
+
 /* Whether the server answers /infinity/v1/info within timeout_ms (the pause menu's check). */
 int azimuth_net_ping(int timeout_ms) {
     char reply[256];

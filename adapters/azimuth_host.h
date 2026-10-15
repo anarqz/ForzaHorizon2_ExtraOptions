@@ -37,6 +37,8 @@ DWORD azimuth_net_request(const wchar_t *method, const wchar_t *path, const wcha
                           const wchar_t *content_type, const void *body, size_t body_size, void *out,
                           size_t capacity, size_t *received);
 int azimuth_net_ping(int timeout_ms);
+DWORD azimuth_net_call_quick(const wchar_t *method, const wchar_t *path, const wchar_t *extra_header,
+                             const char *body, char *out, size_t capacity, int timeout_ms);
 /* GET https://<host><path> into `out` (azimuth_update.c reads the release from GitHub). */
 DWORD azimuth_net_fetch(const wchar_t *host, const wchar_t *path, void *out, size_t capacity, size_t *received);
 /* [Network] AutoUpdate (default 1). */
@@ -65,6 +67,10 @@ void azimuth_account_set_online(int online);
 void azimuth_account_restart(void);
 int azimuth_account_log_in(const wchar_t *gamertag, const wchar_t *web_key, wchar_t *message, size_t cap);
 const wchar_t *azimuth_account_notice(void);
+/* The friendship with a player picked in the game (player actions): 2 friends, 1 asked them,
+   3 they asked, 0 neither, -1 unknown; and adding / removing them. */
+int azimuth_account_friend_state(unsigned long long xuid);
+int azimuth_account_friend_change(unsigned long long xuid, int add, wchar_t *message, size_t cap);
 /* azimuth_update.c: the self-update, offered the server's latestHook / latestRelease. */
 enum { UPDATE_NONE, UPDATE_AVAILABLE, UPDATE_DOWNLOADING, UPDATE_INSTALLED };
 void azimuth_update_offer(const char *latest, const char *release);
