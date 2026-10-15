@@ -812,13 +812,16 @@ static void menu_click(void *page) {
    item from the list at page+0x4a0 (FUN_140e25a80) and ignores ids it does not know.
    Right after SHOW GAMERCARD (id 1, the first) one more item goes in: ADD FRIEND, REMOVE
    FRIEND, CANCEL or ACCEPT FRIEND REQUEST, from the server's answer; choosing it asks the
-   server again and adds or removes. */
+   server again and adds or removes. When the player is in a free roam world (hosting it or
+   playing in it), JOIN WORLD follows: it chooses that world for this player's next FREE ROAM
+   ONLINE (azimuth_world.c). */
 #define ACTIONS_ADD_RVA 0xdfec20u
 #define ACTIONS_ITEM_RVA 0xdf3730u
 #define ACTIONS_SELECTED_RVA 0xe080a0u
 #define ACTIONS_CURRENT_RVA 0xe25a80u
 #define GAME_OBJECT_FREE_RVA 0x257730u
 #define ACTION_FRIEND 0x40000000
+#define ACTION_WORLD 0x40000001
 
 static const unsigned char actions_add_bytes[15] = {0x4c, 0x89, 0x44, 0x24, 0x18, 0x48, 0x89, 0x54,
                                                     0x24, 0x10, 0x57, 0x48, 0x83, 0xec, 0x30};
@@ -835,7 +838,7 @@ typedef unsigned long long (*PlayerXuidFn)(void *);
 
 static ActionsAddFn actions_add_original;
 static ActionsSelectedFn actions_selected_original;
-static unsigned long long actions_xuid;
+static unsigned long long actions_xuid, actions_world_xuid;
 
 /* The game's reference count (+0x10); the object goes when it reaches 0. */
 static void game_object_release(void *object) {
@@ -848,6 +851,24 @@ static unsigned long long actions_player(void *page) {
     unsigned char *holder = *(unsigned char **)((unsigned char *)page + 0x4d0);
     void **player = holder ? *(void ***)(holder + 0x78) : 0;
     return player ? ((PlayerXuidFn)(*(void ***)player)[0x38 / sizeof(void *)])(player) : 0;
+}
+
+static void actions_insert(void *collection, int action, const wchar_t *label) {
+    MenuText *text = menu_text(azimuth_tr(label));
+    if (!text) {
+        return;
+    }
+    void *made = 0;
+    ((ActionsItemFn)(uintptr_t)(menu_game + ACTIONS_ITEM_RVA))(&made, &action, (void **)&text);
+    menu_text_release(text);
+    if (!made) {
+        return;
+    }
+    /* as FUN_140dfec20 adds it, without the page's mask */
+    void **table = *(void ***)collection;
+    unsigned count = *(unsigned *)(*(unsigned char **)((unsigned char *)collection + 0x50) + 0x30);
+    ((ActionsInsertFn)table[0x40 / sizeof(void *)])(collection, count, made, table, -2);
+    game_object_release(made);
 }
 
 static void actions_add(void *page, void **list, void **item) {
@@ -864,25 +885,55 @@ static void actions_add(void *page, void **list, void **item) {
         return; /* offline, no profile, or the player is not on this server */
     }
     actions_xuid = xuid;
-    MenuText *text = menu_text(azimuth_tr(state == 2   ? L"REMOVE FRIEND"
-                                          : state == 1 ? L"CANCEL FRIEND REQUEST"
-                                          : state == 3 ? L"ACCEPT FRIEND REQUEST"
-                                                       : L"ADD FRIEND"));
-    if (!text) {
+    actions_insert(collection, ACTION_FRIEND,
+                   state == 2   ? L"REMOVE FRIEND"
+                   : state == 1 ? L"CANCEL FRIEND REQUEST"
+                   : state == 3 ? L"ACCEPT FRIEND REQUEST"
+                                : L"ADD FRIEND");
+    char host[64], why[16];
+    int password = 0;
+    if (azimuth_world_of(xuid, host, sizeof(host), &password, why, sizeof(why)) == 1) {
+        actions_world_xuid = xuid;
+        actions_insert(collection, ACTION_WORLD, L"JOIN WORLD");
+    }
+}
+
+/* JOIN WORLD: the world the player is in becomes this player's next FREE ROAM ONLINE. */
+static void actions_world(void) {
+    static wchar_t text[300];
+    char host[64], why[16], error[200];
+    int password = 0;
+    int found = azimuth_world_of(actions_world_xuid, host, sizeof(host), &password, why, sizeof(why));
+    if (found < 0) {
+        menu_retry(L"JOIN WORLD", L"The server did not answer.", actions_world);
         return;
     }
-    void *made = 0;
-    int action = ACTION_FRIEND;
-    ((ActionsItemFn)(uintptr_t)(menu_game + ACTIONS_ITEM_RVA))(&made, &action, (void **)&text);
-    menu_text_release(text);
-    if (!made) {
+    if (!found) {
+        menu_info(L"JOIN WORLD", L"This player is not in a world anymore.");
         return;
     }
-    /* as FUN_140dfec20 adds it, without the page's mask */
-    void **table = *(void ***)collection;
-    unsigned count = *(unsigned *)(*(unsigned char **)((unsigned char *)collection + 0x50) + 0x30);
-    ((ActionsInsertFn)table[0x40 / sizeof(void *)])(collection, count, made, table, -2);
-    game_object_release(made);
+    if (why[0]) {
+        menu_info(L"JOIN WORLD", why[0] == 'f' && why[1] == 'u'   ? L"The world is full."
+                                 : why[0] == 'f'                  ? L"Only the host's friends can join this world."
+                                 : why[0] == 'b'                  ? L"The host does not let you join this world."
+                                                                  : L"This world is private.");
+        return;
+    }
+    if (password) {
+        menu_info(L"JOIN WORLD", L"This world has a password. Typing it here comes in the next version.");
+        return;
+    }
+    if (!azimuth_world_join(actions_world_xuid, "", error, sizeof(error))) {
+        MultiByteToWideChar(CP_UTF8, 0, error, -1, text, (int)ARRAY_COUNT(text));
+        menu_info(L"JOIN WORLD", text);
+        return;
+    }
+    line_start();
+    line_add(L"Done. Go to FREE ROAM ONLINE to enter the world of ");
+    MultiByteToWideChar(CP_UTF8, 0, host, -1, text, (int)ARRAY_COUNT(text));
+    menu_line_raw(text);
+    line_add(L". If you are online now, go back to HORIZON SOLO first.");
+    menu_info(L"JOIN WORLD", menu_line);
 }
 
 static void actions_friend(void) {
@@ -907,11 +958,16 @@ static void actions_selected(void *page, char flag) {
     }
     int id = current ? *(int *)((unsigned char *)current + 0x68) : 0;
     game_object_release(current);
-    if (id != ACTION_FRIEND) {
+    if (id != ACTION_FRIEND && id != ACTION_WORLD) {
         actions_selected_original(page, flag);
         return;
     }
     menu_page = page;
+    if (id == ACTION_WORLD) {
+        actions_world_xuid = actions_player(page);
+        actions_world();
+        return;
+    }
     actions_xuid = actions_player(page);
     actions_friend();
 }

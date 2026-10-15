@@ -104,6 +104,11 @@ const wchar_t *azimuth_world_config_path(void);
 int azimuth_world_start(const wchar_t **why);
 int azimuth_world_listed(void);
 void azimuth_world_left(void);
+/* The world a player is in (1, 0 none, -1 no answer), and choosing it for the next FREE ROAM
+   ONLINE (ENTRAR NO MUNDO). */
+int azimuth_world_of(unsigned long long xuid, char *host, size_t host_capacity, int *password, char *why,
+                     size_t why_capacity);
+int azimuth_world_join(unsigned long long host, const char *password, char *error, size_t error_capacity);
 void azimuth_world_on_request(const wchar_t *method, const wchar_t *url, const unsigned char *body, size_t size);
 void azimuth_world_stop(void);
 void azimuth_world_describe(char *visibility, size_t visibility_capacity, int *has_password,

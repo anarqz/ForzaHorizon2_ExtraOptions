@@ -627,6 +627,114 @@ void azimuth_world_on_request(const wchar_t *method, const wchar_t *url, const u
                                    : "WORLD: private free roam session, but the world did not open.\r\n");
 }
 
+/* ------------------------------------------------------------ joining a world */
+
+static char world_of_reply[1024];
+
+/* The value of "key" in a flat JSON object (strings, numbers, booleans; first match). */
+static int world_json(const char *json, const char *key, char *out, size_t capacity) {
+    char needle[40];
+    WorldText t = {needle, 0, sizeof(needle)};
+    needle[0] = 0;
+    world_add(&t, "\"");
+    world_add(&t, key);
+    world_add(&t, "\":");
+    const char *at = text_find(json, text_length(json), needle);
+    size_t n = 0;
+    out[0] = 0;
+    if (!at) {
+        return 0;
+    }
+    at += t.size;
+    while (*at == ' ') {
+        ++at;
+    }
+    if (*at == '"') {
+        for (++at; *at && *at != '"' && n + 1 < capacity; ++at) {
+            if (*at == '\\' && at[1]) {
+                ++at;
+            }
+            out[n++] = *at;
+        }
+    } else {
+        for (; *at && *at != ',' && *at != '}' && n + 1 < capacity; ++at) {
+            out[n++] = *at;
+        }
+    }
+    out[n] = 0;
+    return 1;
+}
+
+/* The world `xuid` is in (hosting or playing): 1 with its host name, whether it has a
+   password and why the caller cannot join ("" = can), 0 none, -1 no answer. */
+int azimuth_world_of(unsigned long long xuid, char *host, size_t host_capacity, int *password, char *why,
+                     size_t why_capacity) {
+    wchar_t path[64];
+    static const wchar_t prefix[] = L"/infinity/v1/worlds/of/";
+    size_t n = 0;
+    char digits[24];
+    unsigned count = 0;
+    if (!azimuth_account_token() || !xuid) {
+        return -1;
+    }
+    for (unsigned long long v = xuid; v; v /= 10) {
+        digits[count++] = (char)('0' + v % 10);
+    }
+    for (size_t i = 0; prefix[i]; ++i) path[n++] = prefix[i];
+    while (count) path[n++] = (wchar_t)digits[--count];
+    path[n] = 0;
+    DWORD status = azimuth_net_call_quick(L"GET", path, world_token_header(), 0, world_of_reply, sizeof(world_of_reply),
+                                          1500);
+    if (status != 200) {
+        return -1;
+    }
+    if (text_find(world_of_reply, text_length(world_of_reply), "\"world\":null")) {
+        return 0;
+    }
+    char flag[8];
+    world_json(world_of_reply, "host", host, host_capacity);
+    world_json(world_of_reply, "password", flag, sizeof(flag));
+    *password = flag[0] == 't';
+    world_json(world_of_reply, "why", why, why_capacity);
+    return 1;
+}
+
+/* Chooses the world of `host` for the next FREE ROAM ONLINE (POST worlds/<host>/join).
+   1 taken; 0 refused, with the server's reason in `error` (UTF-8). */
+int azimuth_world_join(unsigned long long host, const char *password, char *error, size_t error_capacity) {
+    static char body[160], reply[512];
+    wchar_t path[64];
+    static const wchar_t prefix[] = L"/infinity/v1/worlds/";
+    size_t n = 0;
+    char digits[24];
+    unsigned count = 0;
+    WorldText t = {body, 0, sizeof(body)};
+    body[0] = 0;
+    error[0] = 0;
+    for (unsigned long long v = host; v; v /= 10) {
+        digits[count++] = (char)('0' + v % 10);
+    }
+    for (size_t i = 0; prefix[i]; ++i) path[n++] = prefix[i];
+    while (count) path[n++] = (wchar_t)digits[--count];
+    path[n++] = L'/';
+    path[n++] = L'j';
+    path[n++] = L'o';
+    path[n++] = L'i';
+    path[n++] = L'n';
+    path[n] = 0;
+    world_add(&t, "{\"password\":");
+    world_add_json(&t, password ? password : "");
+    world_add(&t, "}");
+    DWORD status = azimuth_net_call(L"POST", path, world_token_header(), body, reply, sizeof(reply));
+    if (status == 200) {
+        return 1;
+    }
+    if (!world_json(reply, "error", error, error_capacity) || !error[0]) {
+        world_copy_value(error, error_capacity, "The server did not answer.", 26);
+    }
+    return 0;
+}
+
 /* What server.cfg says, for the popup. */
 void azimuth_world_describe(char *visibility, size_t visibility_capacity, int *has_password,
                             unsigned *max_players, unsigned *port) {
