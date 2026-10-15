@@ -19,11 +19,24 @@ COMMON_SOURCES = [
     "sha256.c",
     "patches_generated.c",
     "features/garage.c",
-    "features/languages.c",
     "features/road_placement.c",
     "features/gamerpic.c",
     "features/treasure_map.c",
+    "features/minimap.c",
+    "features/rims.c",
+    "features/stock_wheels.c",
+    "features/drift_camera.c",
+    "features/video_settings.c",
+    "features/camera_fov.c",
+    "features/video_options.c",
+    "features/video_options_text.c",
+    "features/video_options_xaml.c",
+    "features/photo_sampling.c",
+    "features/media_overrides.c",
+    "features/vehicle_controls.c",
+    "features/roof_fade.c",
     "features/autodrive.c",
+    "features/game_input.c",
     "features/autodrive_game.c",
     "features/autodrive_notice.c",
     "features/autodrive_ui.c",
@@ -81,6 +94,7 @@ def compiler_arguments(compiler, options):
 
 def build(compiler, output, directory, options):
     directory.mkdir(parents=True, exist_ok=True)
+    output.parent.mkdir(parents=True, exist_ok=True)
     objects = []
     sources = [*COMMON_SOURCES]
     sources.extend(
@@ -96,6 +110,7 @@ def build(compiler, output, directory, options):
             "adapters/azimuth_cloud.c",
             "adapters/azimuth_online_menu.c",
             "adapters/azimuth_ui.c",
+            "adapters/azimuth_markers.c",
         ]
         if options.azimuth
         else ["adapters/mezcal.c"]

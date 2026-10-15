@@ -2,7 +2,8 @@
 #include "support.h"
 
 /* Decode PNG with the real OS codec, outside DllMain. Submit linear RGBA8
-   pixels through FH2's raw-image path, which does not use its empty WIC GUIDs. */
+   pixels through FH2's raw-image path, which does not use its empty WIC GUIDs.
+ */
 #define CINTERFACE
 #define COBJMACROS
 #include <wincodec.h>
@@ -58,7 +59,8 @@ unsigned char *image_decode_png(const unsigned char *png_bytes, DWORD png_size, 
                                               WICBitmapPaletteTypeCustom))) {
         goto done;
     }
-    /* FH2 chooses a 1D texture for height=1; repeat that row to keep a 2D image. */
+    /* FH2 chooses a 1D texture for height=1; repeat that row to keep a 2D image.
+     */
     UINT texture_height = height == 1 ? 2 : height;
     pixel_bytes = width * texture_height * 4u;
     pixels = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, pixel_bytes);

@@ -1,6 +1,6 @@
+#include "logging.h"
 #include "runtime.h"
 #include "settings.h"
-#include "logging.h"
 #include "support.h"
 
 #ifndef FH2_TWEAKS_TEST
@@ -82,13 +82,13 @@ static unsigned char *azimuth_find_game_image(void) {
             azimuth_region_is_readable(&m) && m.RegionSize >= sizeof(IMAGE_DOS_HEADER) &&
             azimuth_has_game_headers(m.AllocationBase)) {
             if (!azimuth_image_is_complete(m.AllocationBase)) {
-                status_set(
-                    "REFUSED: mapped FH2 image is incomplete or inaccessible. No patches applied.");
+                status_set("REFUSED: mapped FH2 image is incomplete or inaccessible. "
+                           "No patches applied.");
                 return 0;
             }
             if (found) {
-                status_set(
-                    "REFUSED: more than one supported FH2 image is mapped. No patches applied.");
+                status_set("REFUSED: more than one supported FH2 image is mapped. No "
+                           "patches applied.");
                 return 0;
             }
             found = m.AllocationBase;
@@ -100,8 +100,8 @@ static unsigned char *azimuth_find_game_image(void) {
         p = next;
     }
     if (!found) {
-        status_set(
-            "REFUSED: Azimuth has not mapped the supported FH2 executable. No patches applied.");
+        status_set("REFUSED: Azimuth has not mapped the supported FH2 executable. "
+                   "No patches applied.");
     }
     return found;
 }
@@ -152,12 +152,16 @@ static int azimuth_resolve_game_paths(HINSTANCE instance) {
     if (!path_join(file_path, exe_path, L"data\\azimuth.ini")) {
         goto path_error;
     }
-    n = GetPrivateProfileStringW(L"launcher", L"game_folder", L"", azimuth_folder, 32768,
+    n = GetPrivateProfileStringW(L"title-1a96545b", L"folder", L"", azimuth_folder, 32768,
                                  file_path);
+    if (!n) {
+        n = GetPrivateProfileStringW(L"launcher", L"game_folder", L"", azimuth_folder, 32768,
+                                     file_path);
+    }
     if (!n || n >= 32767) {
         goto path_error;
     }
-    /* Resolve relative game_folder against azimuth.exe, as its launcher does. */
+    /* Relative game folders are based on the launcher directory. */
     if (!((azimuth_folder[0] && azimuth_folder[1] == L':') || azimuth_folder[0] == L'\\' ||
           azimuth_folder[0] == L'/')) {
         if (!path_join(file_path, exe_path, azimuth_folder)) {
@@ -175,8 +179,8 @@ static int azimuth_resolve_game_paths(HINSTANCE instance) {
     }
     return 1;
 path_error:
-    status_set(
-        "REFUSED: cannot resolve launcher.game_folder from data/azimuth.ini. No patches applied.");
+    status_set("REFUSED: cannot resolve the FH2 game folder from "
+               "data/azimuth.ini. No patches applied.");
     ModOptions options;
     settings_defaults(&options);
     log_start(mod_directory, &options);
@@ -195,8 +199,8 @@ static void azimuth_initialize(HINSTANCE instance) {
         return;
     }
     if (runtime_initialize(base, exe_path, mod_directory)) {
-        char message[] =
-            "AZIMUTH: mapped FH2 image at 0x0000000000000000; native TLS helper preserved.\r\n";
+        char message[] = "AZIMUTH: mapped FH2 image at 0x0000000000000000; native "
+                         "TLS helper preserved.\r\n";
         const char digits[] = "0123456789abcdef";
         uintptr_t value = (uintptr_t)base;
         for (unsigned i = 0; i < 16; ++i) {

@@ -36,6 +36,36 @@ static void write_text(HANDLE file, const char *text) {
     WriteFile(file, text, (DWORD)text_length(text), &bytes_written, NULL);
 }
 
+static void write_number(HANDLE file, int value) {
+    char number[12];
+    char *cursor = number + sizeof(number) - 1;
+    unsigned magnitude = value < 0 ? 0u - (unsigned)value : (unsigned)value;
+    *cursor = 0;
+    do {
+        *--cursor = (char)('0' + magnitude % 10);
+        magnitude /= 10;
+    } while (magnitude);
+    if (value < 0) {
+        *--cursor = '-';
+    }
+    write_text(file, cursor);
+}
+
+void log_append_value(const char *label, int value) {
+    if (!runtime_log_path[0]) {
+        return;
+    }
+    HANDLE file =
+        CreateFileW(runtime_log_path, FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL,
+                    OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (file != INVALID_HANDLE_VALUE) {
+        write_text(file, label);
+        write_number(file, value);
+        write_text(file, "\r\n");
+        CloseHandle(file);
+    }
+}
+
 void log_start(const wchar_t *directory, const ModOptions *options) {
     if (!path_join(startup_log_path, directory, MOD_LOG_NAME)) {
         return;
@@ -57,13 +87,7 @@ void log_start(const wchar_t *directory, const ModOptions *options) {
         write_text(file, "\r\n");
         write_text(file, definition->log_name);
         write_text(file, "=");
-        if (definition->type == SETTING_TEXT_LANGUAGE ||
-            definition->type == SETTING_AUDIO_LANGUAGE) {
-            write_text(file, value >= 0 && value < LANGUAGE_COUNT ? language_codes[value] : "Auto");
-        } else {
-            char number[] = {(char)('0' + value), 0};
-            write_text(file, number);
-        }
+        write_number(file, value);
     }
     write_text(file, "\r\n");
     CloseHandle(file);

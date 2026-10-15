@@ -1,8 +1,8 @@
-#include "game_addresses.h"
 #include "features.h"
-#include "support.h"
-#include "logging.h"
+#include "game_addresses.h"
 #include "image.h"
+#include "logging.h"
+#include "support.h"
 
 /* Local gamerpic supplied through the game's existing raw-image pipeline.
    All image allocation/submission happens on the converter's UI call, never
@@ -40,22 +40,39 @@ typedef enum {
 
 static volatile LONG gamerpic_state;
 
-/* The adapters resolve dir from the guest EXE/launcher, never the host DLL. */
 void gamerpic_set_directory(const wchar_t *directory) {
-    size_t length = 0;
-    while (directory[length]) {
-        if (length >= 32754) {
-            gamerpic_path[0] = 0;
-            return;
+    gamerpic_path[0] = 0;
+    if (directory && !path_join(gamerpic_path, directory, L"Gamerpic.png")) {
+        gamerpic_path[0] = 0;
+    }
+}
+
+typedef BOOL(WINAPI *PictureFileReader)(HANDLE, void *, DWORD, DWORD *, OVERLAPPED *);
+#ifdef FH2_TWEAKS_TEST
+static PictureFileReader test_reader;
+#endif
+
+static int read_picture_file(HANDLE file, unsigned char *bytes, DWORD size, DWORD *loaded,
+                             DWORD *error) {
+    *loaded = *error = 0;
+    while (*loaded < size) {
+        DWORD count = 0;
+#ifdef FH2_TWEAKS_TEST
+        PictureFileReader reader = test_reader ? test_reader : ReadFile;
+#else
+        PictureFileReader reader = ReadFile;
+#endif
+        if (!reader(file, bytes + *loaded, size - *loaded, &count, NULL)) {
+            *error = GetLastError();
+            return 0;
         }
-        gamerpic_path[length] = directory[length];
-        ++length;
+        if (!count || count > size - *loaded) {
+            *error = ERROR_HANDLE_EOF;
+            return 0;
+        }
+        *loaded += count;
     }
-    if (length && gamerpic_path[length - 1] != L'\\' && gamerpic_path[length - 1] != L'/') {
-        gamerpic_path[length++] = L'\\';
-    }
-    static const wchar_t name[] = L"Gamerpic.png";
-    memory_copy(gamerpic_path + length, name, sizeof(name));
+    return 1;
 }
 
 /* Bound the native decoder's input and reject damaged/truncated PNG containers.
@@ -132,28 +149,45 @@ static void *gamerpic_load_cached_image(void) {
         return 0;
     }
     void *image = 0, *bitmap = 0;
+    DWORD file_error = 0, expected_bytes = 0, bytes_read = 0;
+    const char *png_error = NULL;
     unsigned char *png_bytes = 0, *rgba_pixels = 0;
     HANDLE heap = GetProcessHeap(), file = INVALID_HANDLE_VALUE;
-    const char *diagnostic =
-        "GAMERPIC: configured Gamerpic.png unavailable; using the original picture.\r\n";
+    const char *diagnostic = "GAMERPIC: configured Gamerpic.png unavailable; "
+                             "using the original picture.\r\n";
     if (!gamerpic_path[0]) {
         goto done;
     }
     file = CreateFileW(gamerpic_path, GENERIC_READ, FILE_SHARE_READ, 0, OPEN_EXISTING,
                        FILE_ATTRIBUTE_NORMAL, 0);
     if (file == INVALID_HANDLE_VALUE) {
+        file_error = GetLastError();
         goto done;
     }
     LARGE_INTEGER size;
-    DWORD bytes_read;
-    diagnostic = "GAMERPIC: Gamerpic.png is unreadable or invalid (PNG, maximum 2048x2048/16 MiB); "
-                 "using the original picture.\r\n";
-    if (!GetFileSizeEx(file, &size) || size.QuadPart < 57 || size.QuadPart > PNG_MAX_FILE_SIZE) {
+    diagnostic = "GAMERPIC: file-size query failed; using the original picture.\r\n";
+    if (!GetFileSizeEx(file, &size)) {
+        file_error = GetLastError();
         goto done;
     }
-    png_bytes = HeapAlloc(heap, 0, (SIZE_T)size.QuadPart);
-    if (!png_bytes || !ReadFile(file, png_bytes, (DWORD)size.QuadPart, &bytes_read, 0) ||
-        bytes_read != size.QuadPart || !image_validate_png(png_bytes, bytes_read)) {
+    diagnostic = "GAMERPIC: picture file is outside the supported 57-byte/16-MiB range; using the "
+                 "original picture.\r\n";
+    if (size.QuadPart < 57 || size.QuadPart > PNG_MAX_FILE_SIZE) {
+        goto done;
+    }
+    expected_bytes = (DWORD)size.QuadPart;
+    png_bytes = HeapAlloc(heap, 0, expected_bytes);
+    diagnostic = "GAMERPIC: PNG file-buffer allocation failed; using the original picture.\r\n";
+    if (!png_bytes) {
+        goto done;
+    }
+    diagnostic = "GAMERPIC: PNG file read failed; using the original picture.\r\n";
+    if (!read_picture_file(file, png_bytes, expected_bytes, &bytes_read, &file_error)) {
+        goto done;
+    }
+    png_error = image_png_error(png_bytes, bytes_read);
+    diagnostic = "GAMERPIC: PNG validation failed; using the original picture.\r\n";
+    if (png_error) {
         goto done;
     }
     DWORD texture_size;
@@ -165,24 +199,25 @@ static void *gamerpic_load_cached_image(void) {
     }
     gamerpic_create(&bitmap);
     if (!bitmap) {
-        diagnostic = "GAMERPIC: native bitmap allocation failed; using the original picture.\r\n";
+        diagnostic = "GAMERPIC: native bitmap allocation failed; using the "
+                     "original picture.\r\n";
         goto done;
     }
     gamerpic_wrap(&image, &bitmap);
     if (!image) {
-        diagnostic =
-            "GAMERPIC: native image wrapper allocation failed; using the original picture.\r\n";
+        diagnostic = "GAMERPIC: native image wrapper allocation failed; using the "
+                     "original picture.\r\n";
         goto done;
     }
     if (!gamerpic_submit_pixels(bitmap, rgba_pixels, (int)texture_size, width, height)) {
         gamerpic_release_reference(image);
         image = 0;
-        diagnostic =
-            "GAMERPIC: native pixel buffer allocation failed; using the original picture.\r\n";
+        diagnostic = "GAMERPIC: native pixel buffer allocation failed; using the "
+                     "original picture.\r\n";
         goto done;
     }
-    diagnostic =
-        "GAMERPIC: local Gamerpic.png decoded and submitted through the native texture loader.\r\n";
+    diagnostic = "GAMERPIC: local Gamerpic.png decoded and submitted through the "
+                 "native texture loader.\r\n";
 done:
     if (file != INVALID_HANDLE_VALUE) {
         CloseHandle(file);
@@ -197,6 +232,16 @@ done:
     gamerpic_image = image;
     InterlockedExchange(&gamerpic_state, image ? GAMERPIC_READY : GAMERPIC_UNAVAILABLE);
     log_append(diagnostic);
+    if (!image && (file_error || expected_bytes)) {
+        log_append_value("GAMERPIC: Win32 file error=", (int)file_error);
+        log_append_value("GAMERPIC: expected file bytes=", (int)expected_bytes);
+        log_append_value("GAMERPIC: loaded file bytes=", (int)bytes_read);
+    }
+    if (png_error) {
+        log_append("GAMERPIC: PNG reason: ");
+        log_append(png_error);
+        log_append("\r\n");
+    }
     return image;
 }
 
@@ -243,6 +288,14 @@ void gamerpic_prepare_hook(unsigned char *game_image) {
     gamerpic_destroy_object = (GamerpicDestroyFn)(game_image + GAME_RVA_DESTROY_UI_OBJECT);
 }
 #ifdef FH2_TWEAKS_TEST
+__declspec(dllexport) void Fh2TestGamerpicLogDirectory(const wchar_t *directory) {
+    log_set_directory(directory);
+}
+
+__declspec(dllexport) void Fh2TestGamerpicReader(PictureFileReader reader) {
+    test_reader = reader;
+}
+
 __declspec(dllexport) void *Fh2TestGamerpicHookAddress(void) {
     return (void *)gamerpic_convert_hook;
 }

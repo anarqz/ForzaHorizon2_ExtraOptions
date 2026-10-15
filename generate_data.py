@@ -9,17 +9,22 @@ SUPPORTED_GROUPS = {
     "VIP",
     "INTRO",
     "MARKETPLACE",
+    "SOCIAL",
+    "CLUBS",
+    "RIVALS",
     "LIVERY",
     "MSAA",
     "PAUSE_GARAGE",
-    "TEXT_INIT",
-    "TEXT_LOCK",
-    "AUDIO_LANGUAGE",
     "ISLAND_CARS",
     "PARENTAL",
     "PHOTO_CAMERA",
     "TREASURE_MAP",
     "SUN_SHADOWS",
+    "MINIMAP",
+    "BOOT_CAR_MEET",
+    "RIMS",
+    "DRIFT_CAMERA",
+    "VIDEO_OPTIONS",
 }
 
 
@@ -69,14 +74,6 @@ def generate():
             )
         accepted = ", ".join(symbols[value] for value in variants)
         definitions.append(f"static const unsigned char *const {name}_accepted[] = {{{accepted}}};")
-        if "language_targets" in patch:
-            targets = ", ".join(symbols[value] for value in patch["language_targets"])
-            definitions.append(
-                f"const unsigned char *const {name}_targets[LANGUAGE_COUNT] = {{{targets}}};"
-            )
-            declarations.append(
-                f"extern const unsigned char *const {name}_targets[LANGUAGE_COUNT];"
-            )
         patch_rows.append(
             "    {"
             f"0x{patch['rva']:x}, 0x{patch['offset']:x}, {len(bytes.fromhex(patch['original']))}, "

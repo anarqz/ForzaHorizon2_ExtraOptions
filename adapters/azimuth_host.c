@@ -17,6 +17,25 @@ static int protection_failure = -1;
 static int protection_calls;
 #endif
 
+static const struct {
+    AzimuthBuild build;
+    uint32_t timestamp, image_size;
+} supported_hosts[] = {
+    {AZIMUTH_096, 0x6aca9dc0u, 0x349000u},
+    {AZIMUTH_097, 0x6acb70a6u, 0x352000u},
+    {AZIMUTH_098, 0x6ace09b5u, 0x35a000u},
+    {AZIMUTH_099, 0x6aceb567u, 0x3b9000u},
+};
+
+static unsigned host_image_size(AzimuthBuild build) {
+    for (unsigned i = 0; i < ARRAY_COUNT(supported_hosts); ++i) {
+        if (supported_hosts[i].build == build) {
+            return supported_hosts[i].image_size;
+        }
+    }
+    return 0;
+}
+
 AzimuthBuild azimuth_host_build(const unsigned char *base) {
     IMAGE_DOS_HEADER dos;
     IMAGE_NT_HEADERS64 nt;
@@ -30,11 +49,11 @@ AzimuthBuild azimuth_host_build(const unsigned char *base) {
         nt.OptionalHeader.Magic != IMAGE_NT_OPTIONAL_HDR64_MAGIC) {
         return AZIMUTH_UNKNOWN;
     }
-    if (nt.FileHeader.TimeDateStamp == 0x6aca9dc0u && nt.OptionalHeader.SizeOfImage == 0x349000u) {
-        return AZIMUTH_096;
-    }
-    if (nt.FileHeader.TimeDateStamp == 0x6acb70a6u && nt.OptionalHeader.SizeOfImage == 0x352000u) {
-        return AZIMUTH_097;
+    for (unsigned i = 0; i < ARRAY_COUNT(supported_hosts); ++i) {
+        if (nt.FileHeader.TimeDateStamp == supported_hosts[i].timestamp &&
+            nt.OptionalHeader.SizeOfImage == supported_hosts[i].image_size) {
+            return supported_hosts[i].build;
+        }
     }
     return AZIMUTH_UNKNOWN;
 }
@@ -133,8 +152,7 @@ int azimuth_patch_host_codes(unsigned char *base, const HostPatchSet *sets, unsi
         return 0;
     }
     for (unsigned i = 0; i < count; ++i) {
-        if (!prepare_change(base, build == AZIMUTH_097 ? 0x352000u : 0x349000u, &sets[i],
-                            &changes[i])) {
+        if (!prepare_change(base, host_image_size(build), &sets[i], &changes[i])) {
             return 0;
         }
         changed += changes[i].needs_write;

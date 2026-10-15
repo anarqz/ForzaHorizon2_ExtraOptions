@@ -1,7 +1,7 @@
 #include "patch_engine.h"
 #include "patches_generated.h"
-#include "support.h"
 #include "sha256.h"
+#include "support.h"
 
 static unsigned char file_buffer[65536];
 
@@ -14,7 +14,7 @@ int verify_game_file(const wchar_t *executable_path) {
         return 0;
     }
     LARGE_INTEGER size;
-    if (!GetFileSizeEx(file, &size) || size.QuadPart != 58204160) {
+    if (!GetFileSizeEx(file, &size) || size.QuadPart != GAME_FILE_SIZE) {
         CloseHandle(file);
         status_set("REFUSED: unsupported executable size.");
         return 0;
@@ -51,8 +51,9 @@ int verify_game_file(const wchar_t *executable_path) {
     CloseHandle(file);
     unsigned char digest[32];
     sha256_finalize(&hash_context, digest);
-    if (file_offset != 58204160 || !memory_equal(digest, game_file_sha256, 32)) {
-        status_set("REFUSED: executable differs from the supported FH2 build outside the known "
+    if (file_offset != GAME_FILE_SIZE || !memory_equal(digest, game_file_sha256, 32)) {
+        status_set("REFUSED: executable differs from the supported FH2 build "
+                   "outside the known "
                    "patch ranges.");
         return 0;
     }

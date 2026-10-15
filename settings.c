@@ -10,12 +10,15 @@ const SettingDefinition setting_definitions[] = {
     SETTING("Content", "UnlockDLC", unlock_dlc, SETTING_BOOLEAN),
     SETTING("Content", "OfflineVIP", offline_vip, SETTING_BOOLEAN),
     SETTING("Frontend", "SkipIntro", skip_intro, SETTING_BOOLEAN),
+    SETTING("Frontend", "AllRimsCategory", all_rims_category, SETTING_BOOLEAN),
     SETTING("Frontend", "EnableMarketplace", enable_marketplace, SETTING_BOOLEAN),
+    SETTING("Frontend", "EnableSocial", enable_social, SETTING_BOOLEAN),
+    SETTING("Frontend", "EnableClubs", enable_clubs, SETTING_BOOLEAN),
+    SETTING("Frontend", "EnableRivals", enable_rivals, SETTING_BOOLEAN),
     SETTING("Livery", "Enable4K", enable_4k_liveries, SETTING_BOOLEAN),
     SETTING("Livery", "IntermediateMSAA", livery_msaa, SETTING_MSAA),
     SETTING("Livery", "ExtraSupersampling", livery_supersampling, SETTING_BOOLEAN),
     SETTING("Frontend", "GetInCarFromPauseMenu", garage_from_pause, SETTING_BOOLEAN),
-    SETTING("Frontend", "SnapToRoadOnCarChange", snap_car_to_road, SETTING_BOOLEAN),
     SETTING("Content", "UnlockStormIslandCars", unlock_storm_island_cars, SETTING_BOOLEAN),
     SETTING("Content", "UnlockTreasureMap", unlock_treasure_map, SETTING_BOOLEAN),
     SETTING("Compatibility", "DisableParentalLocks", disable_parental_locks, SETTING_BOOLEAN),
@@ -23,16 +26,22 @@ const SettingDefinition setting_definitions[] = {
             SETTING_BOOLEAN),
     SETTING("Profile", "CustomGamerpic", custom_gamerpic, SETTING_BOOLEAN),
     SETTING("PhotoMode", "FreeCamera", free_photo_camera, SETTING_BOOLEAN),
-    SETTING("Graphics", "SmoothSunShadows", smooth_sun_shadows, SETTING_BOOLEAN),
+    SETTING("Files", "EnableMediaOverrides", media_overrides, SETTING_BOOLEAN),
     {"Autodrive", "Enabled", "AutodriveEnabled", offsetof(ModOptions, autodrive), SETTING_BOOLEAN},
+};
+
+static const SettingDefinition legacy_settings[] = {
+    SETTING("Frontend", "SnapToRoadOnCarChange", snap_car_to_road, SETTING_BOOLEAN),
+    SETTING("Frontend", "SkipCarMeetOnStartup", skip_car_meet_on_startup, SETTING_BOOLEAN),
+    SETTING("Frontend", "SpawnAtFestival", spawn_at_festival, SETTING_BOOLEAN),
+    SETTING("Frontend", "SkipIneligibleCarDialogue", skip_ineligible_car_dialogue, SETTING_BOOLEAN),
+    SETTING("Graphics", "SmoothSunShadows", smooth_sun_shadows, SETTING_BOOLEAN),
+    SETTING("HUD", "MinimapFollowsCamera", minimap_follows_camera, SETTING_BOOLEAN),
+    SETTING("PhotoMode", "Samples", photo_mode_samples, SETTING_PHOTO_SAMPLES),
     {"Autodrive", "Cinematic", "AutodriveCinematic", offsetof(ModOptions, autodrive_cinematic),
      SETTING_BOOLEAN},
     {"Autodrive", "InEvents", "AutodriveInEvents", offsetof(ModOptions, autodrive_events),
      SETTING_BOOLEAN},
-    {"Language", "Text", "TextLanguage", offsetof(ModOptions, text_language),
-     SETTING_TEXT_LANGUAGE},
-    {"Language", "Audio", "AudioLanguage", offsetof(ModOptions, audio_language),
-     SETTING_AUDIO_LANGUAGE},
 };
 
 const size_t setting_count = ARRAY_COUNT(setting_definitions);
@@ -50,8 +59,6 @@ void settings_defaults(ModOptions *options) {
         .livery_msaa = 4,
         .livery_supersampling = 0,
         .garage_from_pause = 1,
-        .text_language = LANGUAGE_AUTO,
-        .audio_language = LANGUAGE_AUTO,
         .snap_car_to_road = 1,
         .unlock_storm_island_cars = 1,
         .disable_parental_locks = 1,
@@ -62,6 +69,17 @@ void settings_defaults(ModOptions *options) {
         .autodrive_cinematic = 1,
         .disable_azimuth_save_checksums = 1,
         .smooth_sun_shadows = 0,
+        .skip_ineligible_car_dialogue = 0,
+        .minimap_follows_camera = 1,
+        .media_overrides = 0,
+        .spawn_at_festival = 0,
+        .skip_car_meet_on_startup = 0,
+        .all_rims_category = 0,
+        .drift_camera = 1,
+        .enable_social = 1,
+        .enable_clubs = 1,
+        .enable_rivals = 1,
+        .photo_mode_samples = 256,
     };
 }
 
@@ -83,8 +101,10 @@ static char *trim_whitespace(char *text) {
 }
 
 static int known_section(const char *name) {
-    if (text_equal_ignore_case(name, "General") ||
-        text_equal_ignore_case(name, "Network") || text_equal_ignore_case(name, "Account")) {
+    if (text_equal_ignore_case(name, "Camera") || text_equal_ignore_case(name, "Graphics") ||
+        text_equal_ignore_case(name, "HUD") || text_equal_ignore_case(name, "General") ||
+        text_equal_ignore_case(name, "Language") || text_equal_ignore_case(name, "Network") ||
+        text_equal_ignore_case(name, "Account")) {
         return 1;
     }
     for (size_t index = 0; index < setting_count; ++index) {
@@ -106,12 +126,33 @@ static const SettingDefinition *find_setting(const char *section, const char *ke
             return definition;
         }
     }
+    for (unsigned index = 0; index < ARRAY_COUNT(legacy_settings); ++index) {
+        const SettingDefinition *definition = &legacy_settings[index];
+        if (text_equal_ignore_case(section, definition->section) &&
+            text_equal_ignore_case(key, definition->key)) {
+            return definition;
+        }
+    }
     return NULL;
 }
 
 static int parse_value(const SettingDefinition *definition, const char *text, int *value) {
-    if (definition->type == SETTING_TEXT_LANGUAGE || definition->type == SETTING_AUDIO_LANGUAGE) {
-        return language_parse_setting(text, definition->type == SETTING_AUDIO_LANGUAGE, value);
+    if (definition->type == SETTING_PHOTO_SAMPLES) {
+        unsigned samples = 0;
+        if (!*text) {
+            return 0;
+        }
+        for (const char *digit = text; *digit; ++digit) {
+            if (*digit < '0' || *digit > '9' || samples > 4096) {
+                return 0;
+            }
+            samples = samples * 10 + (unsigned)(*digit - '0');
+        }
+        if (samples > 4096 || (samples && samples < 16)) {
+            return 0;
+        }
+        *value = (int)samples;
+        return 1;
     }
     if (definition->type == SETTING_MSAA) {
         if (text_equal_ignore_case(text, "2")) {
@@ -218,6 +259,22 @@ static int parse_ini(char *text, ModOptions *options) {
             goto invalid;
         }
 
+        // Retired keys are ignored so an older INI still loads.
+        if ((text_equal_ignore_case(section, "Language") &&
+             (text_equal_ignore_case(key, "Text") || text_equal_ignore_case(key, "Audio"))) ||
+            (text_equal_ignore_case(section, "Graphics") &&
+             (text_equal_ignore_case(key, "ForceAnisoFiltering") ||
+              text_equal_ignore_case(key, "MotionBlurSamples")))) {
+            continue;
+        }
+
+        if (text_equal_ignore_case(section, "Camera") &&
+            (text_equal_ignore_case(key, "DriftCamera") ||
+             text_equal_ignore_case(key, "DriftCameraStiffness") ||
+             text_equal_ignore_case(key, "FirstPersonDriftCameraStiffness"))) {
+            continue;
+        }
+
         const SettingDefinition *definition = find_setting(section, key);
         int parsed;
         if (!definition || !parse_value(definition, value, &parsed)) {
@@ -229,8 +286,8 @@ static int parse_ini(char *text, ModOptions *options) {
     return 1;
 
 invalid:
-    status_set(
-        "REFUSED: invalid INI section, option, or value. See the supplied FH2_ExtraOptions.ini.");
+    status_set("REFUSED: invalid INI section, option, or value. See the supplied "
+               "FH2_ExtraOptions.ini.");
     return 0;
 }
 

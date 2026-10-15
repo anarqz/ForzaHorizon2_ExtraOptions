@@ -1,13 +1,57 @@
 #include "runtime.h"
-#include "settings.h"
-#include "logging.h"
-#include "support.h"
 #include "features.h"
+#include "features/video_settings.h"
+#include "logging.h"
 #include "patch_engine.h"
+#include "settings.h"
+#include "support.h"
 
 #ifdef FH2_AZIMUTH
 #include "adapters/azimuth_host.h"
 #endif
+
+static void log_enabled_features(const wchar_t *settings_directory, const ModOptions *options) {
+    log_set_directory(settings_directory);
+    if (options->garage_from_pause) {
+        log_append("GARAGE: XML parse hook installed; awaiting menu-flow resources.\r\n");
+    }
+    if (options->skip_ineligible_car_dialogue) {
+        log_append("FRONTEND: race dialogue skip enabled; awaiting race activation "
+                   "flow.\r\n");
+    }
+    if (options->skip_car_meet_on_startup) {
+        log_append("STARTUP: mainland car-meet boot skipped; Storm Island retains "
+                   "normal boot.\r\n");
+    }
+    if (options->spawn_at_festival && options->skip_car_meet_on_startup) {
+        log_append("STARTUP: mainland festival spawn enabled; Storm Island retains "
+                   "normal boot.\r\n");
+    }
+    if (options->media_overrides) {
+        log_append("FILES: native override hook installed; folders are mounted on "
+                   "the first "
+                   "file lookup outside DLL initialization.\r\n");
+    }
+    if (options->autodrive) {
+        log_append("AUTODRIVE: experimental F2 GPS/AI hooks installed; cinematic "
+                   "delay is 3 "
+                   "seconds.\r\n");
+    }
+    if (options->all_rims_category) {
+        log_append("UPGRADES: virtual All Rims category enabled; database file "
+                   "unchanged.\r\n");
+    }
+    log_append("VEHICLE: right-stick press toggles headlights; stationary "
+               "2-second hold toggles "
+               "supported roofs.\r\n");
+    log_append("SETTINGS: Video and HUD menu hooks installed; awaiting menu "
+               "resources.\r\n");
+    if (options->custom_gamerpic) {
+        log_append("GAMERPIC: converter hook installed; Gamerpic.png is read from "
+                   "the settings "
+                   "folder on the first local-player request.\r\n");
+    }
+}
 
 int runtime_initialize(unsigned char *game_image, const wchar_t *executable_path,
                        const wchar_t *settings_directory) {
@@ -16,6 +60,11 @@ int runtime_initialize(unsigned char *game_image, const wchar_t *executable_path
     gamerpic_set_directory(settings_directory);
     log_reset();
     int initialized = settings_read(settings_directory, &options);
+    if (initialized) {
+        video_settings_load(settings_directory);
+        video_settings_seed(&options);
+        video_settings_apply(&options);
+    }
     if (initialized && options.enabled) {
         initialized = verify_game_file(executable_path);
     }
@@ -37,22 +86,8 @@ int runtime_initialize(unsigned char *game_image, const wchar_t *executable_path
         azimuth_apply_pad();
     }
 #endif
-    if (initialized && options.enabled &&
-        (options.garage_from_pause || options.text_language >= 0 || options.audio_language >= 0 ||
-         options.custom_gamerpic || options.autodrive)) {
-        log_set_directory(settings_directory);
-        if (options.garage_from_pause) {
-            log_append("GARAGE: XML parse hook installed; awaiting menu-flow resources.\r\n");
-        }
-        log_append(language_diagnostics_get());
-        if (options.autodrive) {
-            log_append("AUTODRIVE: experimental F2 GPS/AI hooks installed; cinematic delay is 3 "
-                       "seconds.\r\n");
-        }
-        if (options.custom_gamerpic) {
-            log_append("GAMERPIC: converter hook installed; Gamerpic.png is read from the settings "
-                       "folder on the first local-player request.\r\n");
-        }
+    if (initialized && options.enabled) {
+        log_enabled_features(settings_directory, &options);
     }
     return initialized;
 }

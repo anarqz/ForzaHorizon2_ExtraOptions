@@ -27,7 +27,8 @@ void autodrive_ui_draw(void *application, void *screen, void *transform) {
         ((DrawScreenFn)(game_image + 0x15b51a0))(application, screen, transform);
         return;
     }
-    // Application::Render consumes the passed screen even when no draw is submitted.
+    // Application::Render consumes the passed screen even when no draw is
+    // submitted.
     unsigned char *root = *(unsigned char **)screen;
     if (root && InterlockedDecrement((volatile LONG *)(root + 0x10)) == 0) {
         ((ReleaseFn)(game_image + 0x257730))(root);

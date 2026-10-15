@@ -27,11 +27,17 @@ EXPORTS
     HeapFree
     LoadLibraryExW
     GetProcAddress
+    WideCharToMultiByte
     FreeLibrary
-        
     CreateThread
     MultiByteToWideChar
-    WideCharToMultiByte
     GetTickCount64
     AcquireSRWLockExclusive
     ReleaseSRWLockExclusive
+    GetFileAttributesW
+    FindFirstFileW
+    FindNextFileW
+    FindClose
+    FlushFileBuffers
+    MoveFileExW
+    DeleteFileW

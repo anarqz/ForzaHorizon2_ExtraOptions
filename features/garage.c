@@ -1,6 +1,6 @@
 #include "features.h"
-#include "support.h"
 #include "logging.h"
+#include "support.h"
 
 /* Loaded CXML4Resource text only; no archive or EXE is written. */
 #define XML_PARSE_SLOT_RVA 0x2ec4fe0u
@@ -15,10 +15,12 @@ typedef void *(*GameAllocFn)(size_t size);
 typedef void (*GameFreeFn)(void *buffer);
 
 typedef enum {
-    GARAGE_RESOURCE_NONE = 0,
-    GARAGE_RESOURCE_UI_SCREENS = 1,
-    GARAGE_RESOURCE_PAUSE_FLOW = 2
-} GarageResourceKind;
+    FRONTEND_RESOURCE_NONE = 0,
+    FRONTEND_RESOURCE_UI_SCREENS = 1,
+    FRONTEND_RESOURCE_PAUSE_FLOW = 2,
+    FRONTEND_RESOURCE_RACE_ACTIVATION = 3,
+    FRONTEND_RESOURCE_FREE_ROAM_START = 4
+} FrontendResourceKind;
 
 typedef struct {
     uint32_t begin, end;
@@ -35,7 +37,13 @@ static GameAllocFn game_alloc;
 static GameFreeFn game_free;
 static unsigned char *garage_game_image;
 static int xml_hook_failed;
+static int garage_enabled;
+static int skip_ineligible_car_dialogue;
+static int race_dialogue_failed;
+static int spawn_at_festival;
+static int festival_spawn_failed;
 
+#include "festival_flow.h"
 #include "garage_flow.h"
 
 /* Input disables are deque entries, not a boolean: release our entry before
@@ -44,35 +52,14 @@ static int xml_hook_failed;
    to the HUD or consuming an unrelated owner's reference. Native car loading
    and play_cutscene retain their own readiness checks. */
 
-/* Bounded search: return length if absent or ambiguous. */
 static uint32_t find_unique_text(const char *source, uint32_t length, const char *needle) {
-    size_t needle_size = text_length(needle);
-    uint32_t found = length;
-    if (!needle_size || needle_size > length) {
-        return length;
-    }
-    for (uint32_t offset = 0; offset <= length - (uint32_t)needle_size; ++offset) {
-        if (source[offset] == needle[0] && memory_equal(source + offset, needle, needle_size)) {
-            if (found != length) {
-                return length;
-            }
-            found = offset;
-        }
-    }
-    return found;
+    const char *found = text_find_unique(source, length, needle);
+    return found ? (uint32_t)(found - source) : length;
 }
 
 static uint32_t find_first_text(const char *source, uint32_t length, const char *needle) {
-    size_t needle_size = text_length(needle);
-    if (!needle_size || needle_size > length) {
-        return length;
-    }
-    for (uint32_t offset = 0; offset <= length - (uint32_t)needle_size; ++offset) {
-        if (source[offset] == needle[0] && memory_equal(source + offset, needle, needle_size)) {
-            return offset;
-        }
-    }
-    return length;
+    const char *found = *needle ? text_find(source, length, needle) : NULL;
+    return found ? (uint32_t)(found - source) : length;
 }
 
 static int garage_plan_screen_exits(const char *block, uint32_t block_length, uint32_t start,
@@ -114,8 +101,8 @@ static int garage_plan_pause_transition(const char *source, uint32_t length, con
         find_unique_text(block, block_length, "<exit id=\"car_view\" target=\"view_car\" />") ==
             block_length ||
         find_unique_text(source, length,
-                         "<node id=\"unpause_and_exit_to_hud\" state=\"global.dummy_state\">") ==
-            length) {
+                         "<node id=\"unpause_and_exit_to_hud\" "
+                         "state=\"global.dummy_state\">") == length) {
         return 0;
     }
     plan->edits[0] =
@@ -150,13 +137,12 @@ static int garage_plan_pause_transition(const char *source, uint32_t length, con
         find_unique_text(outer_block, outer_length,
                          "<exit id=\"exit_to_hud\" target=\"_show_hud_and_continue\" />") ==
             outer_length ||
-        find_unique_text(
-            outer_block, outer_length,
-            "<exit id=\"exit_behind_loading_screen\" target=\"_disable_mixer_snapshot\" />") ==
-            outer_length ||
         find_unique_text(outer_block, outer_length,
-                         "<exit id=\"exit_to_mie\" target=\"_show_empty_scene_and_continue\" />") ==
-            outer_length) {
+                         "<exit id=\"exit_behind_loading_screen\" "
+                         "target=\"_disable_mixer_snapshot\" />") == outer_length ||
+        find_unique_text(outer_block, outer_length,
+                         "<exit id=\"exit_to_mie\" "
+                         "target=\"_show_empty_scene_and_continue\" />") == outer_length) {
         return 0;
     }
     exit_at += (uint32_t)text_length(inner_exit);
@@ -200,11 +186,70 @@ static int garage_finalize_edit_plan(XmlPlan *plan, uint32_t length) {
     return 1;
 }
 
-static int garage_plan_xml_edits(const char *source, uint32_t length, unsigned resource_kind,
-                                 XmlPlan *plan) {
+static int plan_ineligible_car_dialogue(const char *source, uint32_t length, XmlPlan *plan) {
+    const char *opening = "<node id=\"play_car_ineligible_vo\" state=\"global.trigger_vo\" "
+                          "target=\"IneligibleCar\" blockui=\"true\">";
+    uint32_t parent = find_unique_text(source, length, "<state id=\"offline_race_entry_flow\">");
+    uint32_t parent_end =
+        parent == length ? length
+                         : find_first_text(source + parent, length - parent, "</state>") + parent;
+    uint32_t start = find_unique_text(source, length, opening);
+    uint32_t end = start == length
+                       ? length
+                       : find_first_text(source + start, length - start, "</node>") + start;
+    if (parent == length || parent_end == length || start <= parent || end >= parent_end ||
+        find_unique_text(source + start, end - start,
+                         "<exit target=\"prepare_for_car_screen\" />") == end - start ||
+        find_first_text(source + start + text_length(opening), end - start - text_length(opening),
+                        "<node ") != end - start - text_length(opening) ||
+        find_unique_text(source + parent, parent_end - parent,
+                         "<exit id=\"no\" target=\"play_car_ineligible_vo\" />") ==
+            parent_end - parent ||
+        find_unique_text(source + parent, parent_end - parent,
+                         "<node id=\"prepare_for_car_screen\" "
+                         "state=\"prepare_for_car_screen\" />") == parent_end - parent) {
+        return 0;
+    }
+    plan->count = 1;
+    plan->edits[0] = (XmlEdit){start, start + (uint32_t)text_length(opening),
+                               "<node id=\"play_car_ineligible_vo\" state=\"global.dummy_state\">"};
+    return garage_finalize_edit_plan(plan, length);
+}
+
+static int plan_festival_spawn(const char *source, uint32_t length, XmlPlan *plan) {
+    const char *placement = "<node state=\"global.place_car_at_restore_point\" />";
+    uint32_t start = find_unique_text(source, length, "<state id=\"cold_boot\">");
+    if (start == length || find_first_text(source, length, "_fh2_festival_") != length) {
+        return 0;
+    }
+    uint32_t end = find_first_text(source + start, length - start, "</state>") + start;
+    if (end == length) {
+        return 0;
+    }
+    const char *block = source + start;
+    uint32_t size = end - start;
+    uint32_t setup = find_unique_text(block, size, "<node state=\"setup_free_roam_offline\" />");
+    uint32_t place = find_unique_text(block, size, placement);
+    uint32_t stream = find_unique_text(
+        block, size, "<node state=\"global.wait_for_streaming_around_local_human_car\" />");
+    if (place == size || stream == size || setup >= place || place >= stream ||
+        find_first_text(block, size, "<state ") != 0 ||
+        find_first_text(block + 1, size - 1, "<state ") != size - 1) {
+        return 0;
+    }
+    plan->count = 1;
+    plan->edits[0] = (XmlEdit){start + place, start + place + (uint32_t)text_length(placement),
+                               festival_boot_placement_xml};
+    return garage_finalize_edit_plan(plan, length);
+}
+
+static int frontend_plan_xml_edits(const char *source, uint32_t length, unsigned resource_kind,
+                                   XmlPlan *plan) {
     if (!source || !length || length > XML_MAX_SIZE ||
-        (resource_kind != GARAGE_RESOURCE_UI_SCREENS &&
-         resource_kind != GARAGE_RESOURCE_PAUSE_FLOW)) {
+        (resource_kind != FRONTEND_RESOURCE_UI_SCREENS &&
+         resource_kind != FRONTEND_RESOURCE_PAUSE_FLOW &&
+         resource_kind != FRONTEND_RESOURCE_RACE_ACTIVATION &&
+         resource_kind != FRONTEND_RESOURCE_FREE_ROAM_START)) {
         return 0;
     }
     for (uint32_t i = 0; i < length; ++i) {
@@ -212,14 +257,20 @@ static int garage_plan_xml_edits(const char *source, uint32_t length, unsigned r
             return 0;
         }
     }
+    if (resource_kind == FRONTEND_RESOURCE_RACE_ACTIVATION) {
+        return plan_ineligible_car_dialogue(source, length, plan);
+    }
+    if (resource_kind == FRONTEND_RESOURCE_FREE_ROAM_START) {
+        return plan_festival_spawn(source, length, plan);
+    }
     if (find_first_text(source, length, "_fh2_car_") != length) {
         return 0;
     }
-    const char *opening = resource_kind == GARAGE_RESOURCE_UI_SCREENS
+    const char *opening = resource_kind == FRONTEND_RESOURCE_UI_SCREENS
                               ? "<state id=\"car_select_garage_pause_menu\">"
                               : "<node id=\"_car_select_garage_pause_menu\" "
                                 "state=\"ui_screens.car_select_garage_pause_menu\">";
-    const char *closing = resource_kind == GARAGE_RESOURCE_UI_SCREENS ? "</state>" : "</node>";
+    const char *closing = resource_kind == FRONTEND_RESOURCE_UI_SCREENS ? "</state>" : "</node>";
     uint32_t start = find_unique_text(source, length, opening);
     if (start == length) {
         return 0;
@@ -234,21 +285,21 @@ static int garage_plan_xml_edits(const char *source, uint32_t length, unsigned r
        type, existing car_selected exits, or changed handlers are refused. */
     uint32_t inner = (uint32_t)text_length(opening);
     if (find_first_text(block + inner, block_length - inner,
-                        resource_kind == GARAGE_RESOURCE_UI_SCREENS ? "<state " : "<node ") !=
+                        resource_kind == FRONTEND_RESOURCE_UI_SCREENS ? "<state " : "<node ") !=
             block_length - inner ||
         find_first_text(block, block_length, "<exit id=\"car_selected\"") != block_length) {
         return 0;
     }
 
-    int planned = resource_kind == GARAGE_RESOURCE_UI_SCREENS
+    int planned = resource_kind == FRONTEND_RESOURCE_UI_SCREENS
                       ? garage_plan_screen_exits(block, block_length, start, plan)
                       : garage_plan_pause_transition(source, length, block, block_length, start,
                                                      end, closing, plan);
     return planned && garage_finalize_edit_plan(plan, length);
 }
 
-static void garage_apply_xml_edits(const char *source, uint32_t length, const XmlPlan *plan,
-                                   char *destination) {
+static void frontend_apply_xml_edits(const char *source, uint32_t length, const XmlPlan *plan,
+                                     char *destination) {
     uint32_t input = 0, output = 0;
     for (unsigned i = 0; i < plan->count; ++i) {
         const XmlEdit *edit = &plan->edits[i];
@@ -281,7 +332,7 @@ static void garage_disable_action_on_failure(const char *message) {
     }
 }
 
-static unsigned garage_identify_resource(const unsigned char *resource) {
+static unsigned frontend_identify_resource(const unsigned char *resource) {
     const char *name = (const char *)(resource + 0xb8);
     size_t length = *(const size_t *)(resource + 0xc8),
            capacity = *(const size_t *)(resource + 0xd0);
@@ -300,8 +351,9 @@ static unsigned garage_identify_resource(const unsigned char *resource) {
             start = i + 1;
         }
     }
-    const char *names[] = {"ui_screens.xml", "pause.xml"};
-    for (unsigned kind = 1; kind <= 2; ++kind) {
+    const char *names[] = {"ui_screens.xml", "pause.xml", "race_trigger_activation.xml",
+                           "free_roam_start.xml"};
+    for (unsigned kind = 1; kind <= ARRAY_COUNT(names); ++kind) {
         const char *expected = names[kind - 1];
         size_t n = text_length(expected);
         if (length - start != n) {
@@ -324,40 +376,76 @@ static unsigned garage_identify_resource(const unsigned char *resource) {
     return 0;
 }
 
-static unsigned char garage_parse_resource_hook(void *game_resource) {
+static void report_xml_failure(unsigned resource_kind, const char *garage_message,
+                               const char *dialogue_message, const char *festival_message) {
+    if (resource_kind == FRONTEND_RESOURCE_FREE_ROAM_START) {
+        __atomic_store_n(&festival_spawn_failed, 1, __ATOMIC_SEQ_CST);
+        log_append(festival_message);
+    } else if (resource_kind == FRONTEND_RESOURCE_RACE_ACTIVATION) {
+        __atomic_store_n(&race_dialogue_failed, 1, __ATOMIC_SEQ_CST);
+        log_append(dialogue_message);
+    } else {
+        garage_disable_action_on_failure(garage_message);
+    }
+}
+
+static unsigned char frontend_parse_resource_hook(void *game_resource) {
     unsigned char *resource = game_resource;
-    unsigned resource_kind = garage_identify_resource(resource);
-    if (resource_kind && !__atomic_load_n(&xml_hook_failed, __ATOMIC_SEQ_CST)) {
+    unsigned resource_kind = frontend_identify_resource(resource);
+    int race_dialogue = resource_kind == FRONTEND_RESOURCE_RACE_ACTIVATION;
+    int festival = resource_kind == FRONTEND_RESOURCE_FREE_ROAM_START;
+    int enabled = festival        ? spawn_at_festival
+                  : race_dialogue ? skip_ineligible_car_dialogue
+                                  : garage_enabled;
+    int failed = __atomic_load_n(festival        ? &festival_spawn_failed
+                                 : race_dialogue ? &race_dialogue_failed
+                                                 : &xml_hook_failed,
+                                 __ATOMIC_SEQ_CST);
+    if (resource_kind && enabled && !failed) {
         char **buffer = (char **)(resource + 0xe0);
         uint32_t *length = (uint32_t *)(resource + 0xe8);
         XmlPlan plan;
-        if (!garage_plan_xml_edits(*buffer, *length, resource_kind, &plan)) {
-            garage_disable_action_on_failure(
-                "GARAGE: unsupported menu-flow text; car reload unavailable.\r\n");
+        if (!frontend_plan_xml_edits(*buffer, *length, resource_kind, &plan)) {
+            report_xml_failure(resource_kind,
+                               "GARAGE: unsupported menu-flow text; car reload unavailable.\r\n",
+                               "FRONTEND: unsupported race flow; ineligible-car dialogue "
+                               "unchanged.\r\n",
+                               "STARTUP: unsupported cold-boot flow; festival override "
+                               "disabled.\r\n");
         } else {
             char *replacement = game_alloc((size_t)plan.length + 1);
             if (!replacement) {
-                garage_disable_action_on_failure(
-                    "GARAGE: menu-flow allocation failed; car reload unavailable.\r\n");
+                report_xml_failure(
+                    resource_kind,
+                    "GARAGE: menu-flow allocation failed; car reload unavailable.\r\n",
+                    "FRONTEND: race-flow allocation failed; ineligible-car dialogue "
+                    "unchanged.\r\n",
+                    "STARTUP: cold-boot allocation failed; festival override "
+                    "disabled.\r\n");
             } else {
-                garage_apply_xml_edits(*buffer, *length, &plan, replacement);
+                frontend_apply_xml_edits(*buffer, *length, &plan, replacement);
                 char *original_buffer = *buffer;
                 *buffer = replacement;
                 *length = plan.length;
                 game_free(original_buffer);
-                log_append(
-                    resource_kind == GARAGE_RESOURCE_UI_SCREENS
-                        ? "GARAGE: ui_screens.xml car_selected exit patched in memory.\r\n"
-                        : "GARAGE: pause.xml car reload/resume sequence patched in memory.\r\n");
-                if (resource_kind == GARAGE_RESOURCE_PAUSE_FLOW) {
-                    log_append(
-                        "GARAGE: loading screen and fast-travel arrival animation enabled.\r\n");
+                log_append(festival        ? "STARTUP: mainland festival placement added to "
+                                             "cold-boot flow.\r\n"
+                           : race_dialogue ? "FRONTEND: blocking IneligibleCar "
+                                             "dialogue skipped in memory.\r\n"
+                           : resource_kind == FRONTEND_RESOURCE_UI_SCREENS
+                               ? "GARAGE: ui_screens.xml car_selected exit patched in "
+                                 "memory.\r\n"
+                               : "GARAGE: pause.xml car reload/resume sequence patched "
+                                 "in memory.\r\n");
+                if (resource_kind == FRONTEND_RESOURCE_PAUSE_FLOW) {
+                    log_append("GARAGE: loading screen and fast-travel arrival animation "
+                               "enabled.\r\n");
                 }
-                if (resource_kind == GARAGE_RESOURCE_PAUSE_FLOW) {
-                    log_append(
-                        "GARAGE: transition input locks balanced; loading radio resumed.\r\n");
+                if (resource_kind == FRONTEND_RESOURCE_PAUSE_FLOW) {
+                    log_append("GARAGE: transition input locks balanced; loading radio "
+                               "resumed.\r\n");
                 }
-                if (resource_kind == GARAGE_RESOURCE_PAUSE_FLOW) {
+                if (resource_kind == FRONTEND_RESOURCE_PAUSE_FLOW) {
                     log_append("GARAGE: direct audio handoff; world-streaming and LOD0 waits "
                                "removed.\r\n");
                 }
@@ -365,9 +453,12 @@ static unsigned char garage_parse_resource_hook(void *game_resource) {
         }
     }
     unsigned char result = original_xml_parse(resource);
-    if (resource_kind && !result) {
-        garage_disable_action_on_failure(
-            "GARAGE: original XML parser failed; car reload unavailable.\r\n");
+    if (resource_kind && enabled && !result) {
+        report_xml_failure(resource_kind,
+                           "GARAGE: original XML parser failed; car reload unavailable.\r\n",
+                           "FRONTEND: original race-flow XML parser failed.\r\n",
+                           "STARTUP: original cold-boot XML parser failed; override "
+                           "disabled.\r\n");
     }
     return result;
 }
@@ -379,7 +470,7 @@ static const unsigned char *const hook_accepted[] = {hook_original_bytes, hook_t
 PatchDefinition garage_hook_patch = {XML_PARSE_SLOT_RVA,
                                      0,
                                      8,
-                                     GROUP_PAUSE_GARAGE,
+                                     GROUP_FRONTEND_XML,
                                      "garage_xml_parse_hook",
                                      hook_original_bytes,
                                      hook_target_bytes,
@@ -389,7 +480,7 @@ PatchDefinition garage_hook_patch = {XML_PARSE_SLOT_RVA,
 
 void garage_prepare_hook(unsigned char *game_image) {
     uintptr_t original_callback = (uintptr_t)(game_image + XML_PARSE_RVA),
-              replacement_callback = (uintptr_t)garage_parse_resource_hook;
+              replacement_callback = (uintptr_t)frontend_parse_resource_hook;
     memory_copy(hook_original_bytes, &original_callback, 8);
     memory_copy(hook_target_bytes, &replacement_callback, 8);
     original_xml_parse = (XmlParseFn)original_callback;
@@ -397,23 +488,32 @@ void garage_prepare_hook(unsigned char *game_image) {
     game_free = (GameFreeFn)(game_image + GAME_FREE_RVA);
     garage_game_image = game_image;
     __atomic_store_n(&xml_hook_failed, 0, __ATOMIC_SEQ_CST);
+    __atomic_store_n(&race_dialogue_failed, 0, __ATOMIC_SEQ_CST);
+    __atomic_store_n(&festival_spawn_failed, 0, __ATOMIC_SEQ_CST);
+}
+
+void garage_commit_options(const ModOptions *options) {
+    garage_enabled = options->garage_from_pause;
+    skip_ineligible_car_dialogue = options->skip_ineligible_car_dialogue;
+    spawn_at_festival = options->spawn_at_festival && options->skip_car_meet_on_startup;
 }
 
 void *garage_callback_address(void) {
-    return (void *)garage_parse_resource_hook;
+    return (void *)frontend_parse_resource_hook;
 }
 #ifdef FH2_TWEAKS_TEST
 __declspec(dllexport) void *Fh2TestXmlHookAddress(void) {
-    return (void *)garage_parse_resource_hook;
+    return (void *)frontend_parse_resource_hook;
 }
 
 __declspec(dllexport) uint32_t Fh2TestXmlTransform(const char *input, uint32_t length,
                                                    unsigned kind, char *output, uint32_t capacity) {
     XmlPlan plan;
-    if (!garage_plan_xml_edits(input, length, kind, &plan) || !output || capacity <= plan.length) {
+    if (!frontend_plan_xml_edits(input, length, kind, &plan) || !output ||
+        capacity <= plan.length) {
         return 0;
     }
-    garage_apply_xml_edits(input, length, &plan, output);
+    frontend_apply_xml_edits(input, length, &plan, output);
     return plan.length;
 }
 #endif

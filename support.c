@@ -62,10 +62,47 @@ int text_equal_ignore_case(const char *left, const char *right) {
     return *left == *right;
 }
 
+const char *text_find(const char *text, size_t length, const char *needle) {
+    size_t needle_length = text_length(needle);
+    if (needle_length > length) {
+        return NULL;
+    }
+    if (!needle_length) {
+        return text;
+    }
+    for (size_t offset = 0; offset <= length - needle_length; ++offset) {
+        if (text[offset] == needle[0] && memory_equal(text + offset, needle, needle_length)) {
+            return text + offset;
+        }
+    }
+    return NULL;
+}
+
+const char *text_find_unique(const char *text, size_t length, const char *needle) {
+    if (!*needle) {
+        return NULL;
+    }
+    const char *found = text_find(text, length, needle);
+    if (!found || text_find(found + 1, length - (size_t)(found + 1 - text), needle)) {
+        return NULL;
+    }
+    return found;
+}
+
 int memory_read(const void *address, void *out, size_t size) {
     SIZE_T count = 0;
     return address && ReadProcessMemory(GetCurrentProcess(), address, out, size, &count) &&
            count == size;
+}
+
+int memory_read_pointer(const void *address, void **value) {
+    return memory_read(address, value, sizeof(*value)) && *value;
+}
+
+int float_is_finite(float value) {
+    uint32_t bits;
+    memory_copy(&bits, &value, sizeof(bits));
+    return (bits & 0x7f800000) != 0x7f800000;
 }
 
 int memory_is_writable(const void *address, size_t size) {

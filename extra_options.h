@@ -1,12 +1,12 @@
 #ifndef FH2_EXTRA_OPTIONS_H
 #define FH2_EXTRA_OPTIONS_H
 #define WIN32_LEAN_AND_MEAN
-#include <windows.h>
-#include <stdint.h>
 #include <stddef.h>
+#include <stdint.h>
+#include <windows.h>
 
 #define MOD_NAME "Forza Horizon 2 Extra Options"
-#define MOD_VERSION "0.2.34+fh2online.33"
+#define MOD_VERSION "0.2.74+fh2online.34"
 #define MOD_INI_NAME L"FH2_ExtraOptions.ini"
 #define MOD_LOG_NAME L"FH2_ExtraOptions.log"
 #define GAME_EXE_NAME L"forza_durango_release_final.exe"
@@ -14,8 +14,6 @@
 #define GAME_FILE_SIZE 58204160u
 #define GAME_IMAGE_SIZE 0x3a18000u
 #define GAME_TIMESTAMP 0x565501edu
-#define LANGUAGE_AUTO -1
-#define LANGUAGE_COUNT 17
 #define ARRAY_COUNT(array) (sizeof(array) / sizeof((array)[0]))
 
 typedef enum {
@@ -26,10 +24,6 @@ typedef enum {
     GROUP_LIVERY,
     GROUP_MSAA,
     GROUP_PAUSE_GARAGE,
-    GROUP_TEXT_INIT,
-    GROUP_TEXT_LOCK,
-    GROUP_AUDIO_LANGUAGE,
-    GROUP_TEXT_RELOAD,
     GROUP_ROAD,
     GROUP_ISLAND_CARS,
     GROUP_PARENTAL,
@@ -37,7 +31,20 @@ typedef enum {
     GROUP_PHOTO_CAMERA,
     GROUP_TREASURE_MAP,
     GROUP_AUTODRIVE,
-    GROUP_SUN_SHADOWS
+    GROUP_SUN_SHADOWS,
+    GROUP_FRONTEND_XML,
+    GROUP_MINIMAP,
+    GROUP_MEDIA_OVERRIDES,
+    GROUP_BOOT_CAR_MEET,
+    GROUP_RIMS,
+    GROUP_DRIFT_CAMERA,
+    GROUP_VIDEO_OPTIONS,
+    GROUP_CAMERA_FOV,
+    GROUP_PHOTO_SAMPLING,
+    GROUP_SOCIAL,
+    GROUP_CLUBS,
+    GROUP_RIVALS,
+    GROUP_VEHICLE_CONTROLS
 } PatchGroup;
 
 typedef struct {
@@ -59,8 +66,8 @@ typedef struct {
     int livery_msaa;
     int livery_supersampling;
     int garage_from_pause;
-    int text_language;
-    int audio_language;
+    int reserved_text_override;
+    int reserved_audio_override;
     int snap_car_to_road;
     int unlock_storm_island_cars;
     int disable_parental_locks;
@@ -72,5 +79,16 @@ typedef struct {
     int autodrive_events;
     int disable_azimuth_save_checksums;
     int smooth_sun_shadows;
+    int skip_ineligible_car_dialogue;
+    int minimap_follows_camera;
+    int media_overrides;
+    int spawn_at_festival;
+    int skip_car_meet_on_startup;
+    int all_rims_category;
+    int drift_camera;
+    int reserved_motion_blur_override;
+    int reserved_filtering_override;
+    int photo_mode_samples;
+    int enable_social, enable_clubs, enable_rivals;
 } ModOptions;
 #endif

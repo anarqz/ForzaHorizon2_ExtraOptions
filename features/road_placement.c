@@ -1,9 +1,15 @@
-#include "game_addresses.h"
 #include "features.h"
-#include "support.h"
+#include "game_addresses.h"
 #include "logging.h"
+#include "support.h"
 
 static unsigned char *road_game_image;
+static int road_enabled = 1;
+
+void road_set_enabled(int enabled) {
+    __atomic_store_n(&road_enabled, enabled != 0, __ATOMIC_RELAXED);
+}
+
 /* NearestRoad destination from the existing car, consumed by the stock
    RestoreCarPosition after loading its replacement. No asynchronous state. */
 #define ROAD_STORE_SLOT_RVA 0x2d275d0u
@@ -24,16 +30,6 @@ static RoadCarFn player_get_car;
 static RoadCacheFn component_get_state_cache;
 static RoadQueryFn car_query_nearest_road;
 static unsigned char road_original_pointer[8], road_target_pointer[8];
-
-static int road_read_pointer(const void *address, void **out) {
-    return memory_read(address, out, 8) && *out;
-}
-
-static int float_is_finite(float value) {
-    uint32_t bits;
-    memory_copy(&bits, &value, 4);
-    return (bits & 0x7f800000) != 0x7f800000;
-}
 
 static int road_is_garage_swap(void *self) {
     /* entity_id is inert while locator_name is empty. A locator marker
@@ -68,7 +64,7 @@ static int road_node_has_heading(unsigned char *node, float position[3]) {
     void *edges;
     int edge_count;
     if (!memory_read(node + 0x14, position, 12) || !memory_read(node + 0x20, &edge_count, 4) ||
-        edge_count < 1 || edge_count > 64 || !road_read_pointer(node, &edges)) {
+        edge_count < 1 || edge_count > 64 || !memory_read_pointer(node, &edges)) {
         return 0;
     }
     for (unsigned i = 0; i < 3; ++i) {
@@ -82,10 +78,10 @@ static int road_node_has_heading(unsigned char *node, float position[3]) {
         void *points;
         int point_index, point_count;
         unsigned char *entry = (unsigned char *)edges + (size_t)i * 16;
-        if (!road_read_pointer(entry, (void **)&edge) || !memory_read(entry + 8, &point_index, 4) ||
-            !road_read_pointer(edge, &points) || !memory_read(edge + 0x10, &point_count, 4) ||
-            point_count < 1 || point_count > 1000000 || point_index < 0 ||
-            point_index >= point_count) {
+        if (!memory_read_pointer(entry, (void **)&edge) ||
+            !memory_read(entry + 8, &point_index, 4) || !memory_read_pointer(edge, &points) ||
+            !memory_read(edge + 0x10, &point_count, 4) || point_count < 1 ||
+            point_count > 1000000 || point_index < 0 || point_index >= point_count) {
             return 0;
         }
         for (int side = -1; side <= 1; side += 2) {
@@ -123,28 +119,29 @@ static int road_store_nearest_destination(unsigned char *car) {
     unsigned char *cache, *node;
     uintptr_t method;
     int previous_reset_mode;
-    if (!road_read_pointer(car, &vtable) ||
+    if (!memory_read_pointer(car, &vtable) ||
         vtable != road_game_image + GAME_RVA_PLAYER_CAR_VTABLE ||
         !memory_read(car + 0x4f94, &previous_reset_mode, 4) ||
-        !memory_is_writable(car + 0x4f94, 4) || !road_read_pointer(car + 0x4f70, &bindings) ||
-        !road_read_pointer(bindings, &vtable) ||
+        !memory_is_writable(car + 0x4f94, 4) || !memory_read_pointer(car + 0x4f70, &bindings) ||
+        !memory_read_pointer(bindings, &vtable) ||
         vtable != road_game_image + GAME_RVA_ROAD_BINDINGS_VTABLE ||
-        !road_read_pointer((unsigned char *)bindings + 0xa8, &outer) ||
-        !road_read_pointer(outer, &inner) ||
-        !road_read_pointer((unsigned char *)inner + 0x10, (void **)&node)) {
+        !memory_read_pointer((unsigned char *)bindings + 0xa8, &outer) ||
+        !memory_read_pointer(outer, &inner) ||
+        !memory_read_pointer((unsigned char *)inner + 0x10, (void **)&node)) {
         return 0;
     }
     float road_position[3];
     if (!road_node_has_heading(node, road_position)) {
         return 0;
     }
-    if (!road_read_pointer(car + 0x4d00, &component) || !road_read_pointer(component, &vtable) ||
+    if (!memory_read_pointer(car + 0x4d00, &component) ||
+        !memory_read_pointer(component, &vtable) ||
         !memory_read((unsigned char *)vtable + 0xc8, &method, 8) ||
         method < (uintptr_t)road_game_image || method >= (uintptr_t)road_game_image + 0x3a18000) {
         return 0;
     }
     owner = ((RoadOwnerFn)method)(component);
-    if (!owner || !road_read_pointer((unsigned char *)owner + 0xd0, &collection)) {
+    if (!owner || !memory_read_pointer((unsigned char *)owner + 0xd0, &collection)) {
         return 0;
     }
     unsigned char cache_key[32] = {0};
@@ -154,7 +151,7 @@ static int road_store_nearest_destination(unsigned char *car) {
     memory_copy(cache_key + 24, &capacity, 8);
     cache = component_get_state_cache(collection, cache_key);
     unsigned char facing_event;
-    if (!road_read_pointer(cache, &vtable) ||
+    if (!memory_read_pointer(cache, &vtable) ||
         vtable != road_game_image + GAME_RVA_PLAYER_STATE_VTABLE ||
         !memory_read(cache + 0x30, &facing_event, 1) || facing_event ||
         !memory_is_writable(cache + 0x10, 32)) {
@@ -193,7 +190,7 @@ static int road_store_nearest_destination(unsigned char *car) {
 
 static void road_store_hook(void *self) {
     original_road_store(self);
-    if (!road_is_garage_swap(self)) {
+    if (!__atomic_load_n(&road_enabled, __ATOMIC_RELAXED) || !road_is_garage_swap(self)) {
         return;
     }
     log_append("GARAGE: native position stored; calculating nearest road.\r\n");
@@ -202,10 +199,10 @@ static void road_store_hook(void *self) {
     void *vtable;
     uintptr_t release;
     int changed = 0;
-    if (road_read_pointer(road_game_image + GAME_RVA_PLAYER_MANAGER, &game) &&
+    if (memory_read_pointer(road_game_image + GAME_RVA_PLAYER_MANAGER, &game) &&
         (player = game_get_local_player(game, 0))) {
         player_get_car(player, &car);
-        if (car && road_read_pointer(car, &vtable) &&
+        if (car && memory_read_pointer(car, &vtable) &&
             memory_read((unsigned char *)vtable + 0x18, &release, 8) &&
             release >= (uintptr_t)road_game_image &&
             release < (uintptr_t)road_game_image + 0x3a18000) {
@@ -213,10 +210,10 @@ static void road_store_hook(void *self) {
             ((RoadReleaseFn)release)(car);
         }
     }
-    log_append(
-        changed
-            ? "GARAGE: nearest-road position and heading stored for loading-screen placement.\r\n"
-            : "GARAGE: nearest-road data unavailable; keeping original car position.\r\n");
+    log_append(changed ? "GARAGE: nearest-road position and heading stored for "
+                         "loading-screen placement.\r\n"
+                       : "GARAGE: nearest-road data unavailable; keeping "
+                         "original car position.\r\n");
 }
 
 static const unsigned char *const road_hook_accepted[] = {road_original_pointer,

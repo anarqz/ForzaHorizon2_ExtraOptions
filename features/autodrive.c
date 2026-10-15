@@ -1,26 +1,25 @@
-#include "features.h"
 #include "autodrive_game.h"
+#include "game_input.h"
 #include "autodrive_notice.h"
 #include "autodrive_ui.h"
+#include "features.h"
 #include "logging.h"
 #include "support.h"
+#include "vehicle_controls.h"
 
 #define CINEMATIC_DELAY 3.0f
 
 typedef void (*UpdateFn)(void *, float);
 typedef void (*ActionFn)(void *);
 typedef void *(*DestroyFn)(void *, unsigned);
-typedef SHORT(WINAPI *KeyStateFn)(int);
-typedef HWND(WINAPI *ForegroundFn)(void);
-typedef DWORD(WINAPI *WindowProcessFn)(HWND, LPDWORD);
-
 static unsigned char *game_image;
-static int cinematic_enabled;
-static KeyStateFn key_state;
-static ForegroundFn foreground_window;
-static WindowProcessFn window_process;
-static int input_initialized, f2_was_down;
-static int pad_was_down, pad_blocked = 1;
+static int cinematic_enabled, autodrive_enabled;
+static int f2_was_down, pad_was_down, pad_blocked = 1;
+
+void autodrive_set_cinematic(int enabled) {
+    cinematic_enabled = enabled != 0;
+}
+
 static void *previous_controller;
 static void *available_tracker;
 
@@ -35,48 +34,7 @@ static int events_enabled;
 
 static AutodriveState drive;
 
-#ifdef FH2_TWEAKS_TEST
-static int test_input, test_f2, test_escape, test_focus;
-#endif
-
-static void input_read(int *f2, int *escape, int *focused) {
-    *f2 = *escape = *focused = 0;
-#ifdef FH2_TWEAKS_TEST
-    if (test_input) {
-        *f2 = test_f2;
-        *escape = test_escape;
-        *focused = test_focus;
-        return;
-    }
-#endif
-    if (!input_initialized) {
-        input_initialized = 1;
-        HMODULE module = LoadLibraryExW(L"user32.dll", 0, LOAD_LIBRARY_SEARCH_SYSTEM32);
-        if (module) {
-            key_state = (KeyStateFn)(uintptr_t)GetProcAddress(module, "GetAsyncKeyState");
-            foreground_window =
-                (ForegroundFn)(uintptr_t)GetProcAddress(module, "GetForegroundWindow");
-            window_process =
-                (WindowProcessFn)(uintptr_t)GetProcAddress(module, "GetWindowThreadProcessId");
-        }
-        if (!key_state || !foreground_window || !window_process) {
-            log_append("AUTODRIVE: keyboard API unavailable; F2 is inactive.\r\n");
-        }
-    }
-    if (!key_state || !foreground_window || !window_process) {
-        return;
-    }
-    HWND window = foreground_window();
-    DWORD process = 0;
-    if (window) {
-        window_process(window, &process);
-    }
-    *focused = process == GetCurrentProcessId();
-    *f2 = (key_state(VK_F2) & 0x8000) != 0;
-    *escape = (key_state(VK_ESCAPE) & 0x8000) != 0;
-}
-
-static void stop_driving(const char *reason, int flash) {
+static void stop_driving(int flash) {
     if (!drive.car) {
         return;
     }
@@ -91,7 +49,6 @@ static void stop_driving(const char *reason, int flash) {
         autodrive_game_flash(camera);
     }
     drive = (AutodriveState){0};
-    log_append(reason);
 }
 
 /* InEvents: in a race the native AI driver follows the event's own route, so only the
@@ -118,23 +75,20 @@ static void start_event_driving(void *satnav) {
     log_append("AUTODRIVE: event driving started; F2 or D-pad Down cancels.\r\n");
 }
 
-static void start_driving(void *satnav) {
-    if (!autodrive_game_is_freeroam()) {
-        if (events_enabled && autodrive_game_is_unpaused()) {
+static void start_driving(void *satnav, void *controller) {
+    if (!autodrive_game_can_start(controller)) {
+        if (events_enabled && !autodrive_game_is_freeroam() && autodrive_game_is_unpaused() &&
+            autodrive_game_has_gameplay_input(controller)) {
             start_event_driving(satnav);
-            return;
         }
-        log_append("AUTODRIVE: toggle ignored outside unpaused single-player free roam.\r\n");
         return;
     }
     int arrived;
     void *route = autodrive_game_route(satnav, &arrived);
     if (!route || arrived) {
-        log_append("AUTODRIVE: set a GPS destination before pressing F2 or D-pad Down.\r\n");
         return;
     }
     if (!autodrive_game_tracker_matches(available_tracker, satnav)) {
-        log_append("AUTODRIVE: the local GPS route tracker is not ready.\r\n");
         return;
     }
     void *car = autodrive_game_get_car();
@@ -143,12 +97,12 @@ static void start_driving(void *satnav) {
     }
     if (autodrive_game_driver_mode(car) != 1) {
         autodrive_game_release_car(car);
-        log_append("AUTODRIVE: toggle ignored while another flow controls the car.\r\n");
         return;
     }
     if (!autodrive_game_begin_route(available_tracker)) {
         autodrive_game_release_car(car);
-        log_append("AUTODRIVE: GPS event-route tracking could not start, or is already owned.\r\n");
+        log_append("AUTODRIVE: GPS event-route tracking could not start, or is "
+                   "already owned.\r\n");
         return;
     }
     if (!autodrive_game_set_ai(car, 1)) {
@@ -161,28 +115,20 @@ static void start_driving(void *satnav) {
     drive.tracker = available_tracker;
     drive.car = car;
     drive.route = route;
-    log_append(autodrive_notice_show()
-                   ? "AUTODRIVE: activation notice submitted to the XP-award HUD.\r\n"
-                   : "AUTODRIVE: activation notice unavailable; driving continues.\r\n");
-    log_append("AUTODRIVE: GPS route tracking started; F2 or D-pad Down cancels.\r\n");
+    autodrive_notice_show();
 }
 
 static void enter_cinematic(void) {
     drive.tried_camera = 1;
     if (!autodrive_game_slow_spin(&drive.camera)) {
-        log_append(
-            "AUTODRIVE: Slow Spin is unavailable; continuing with the normal HUD and camera.\r\n");
         return;
     }
     drive.cinematic = 1;
     autodrive_ui_set_hidden(1);
     autodrive_game_flash(drive.camera.camera);
-    log_append("AUTODRIVE: Slow Spin selected; UI rendering disabled.\r\n");
 }
 
-static void autodrive_tick(void *satnav, float dt) {
-    int f2, escape, focused;
-    input_read(&f2, &escape, &focused);
+static void autodrive_tick(void *satnav, float dt, int f2, int escape, int focused) {
     int pressed = f2 && !f2_was_down;
     f2_was_down = f2;
     void *controller;
@@ -193,12 +139,6 @@ static void autodrive_tick(void *satnav, float dt) {
         pad_blocked = 0;
     }
     pressed |= down > 0 && !pad_was_down && !pad_blocked;
-    if (down > 0 && !pad_was_down) {
-        log_append(
-            pad_blocked
-                ? "AUTODRIVE: D-pad Down ignored until a neutral release after input recovery.\r\n"
-                : "AUTODRIVE: D-pad Down toggle received.\r\n");
-    }
     pad_was_down = down > 0;
     previous_controller = controller;
     if (drive.car) {
@@ -206,9 +146,8 @@ static void autodrive_tick(void *satnav, float dt) {
             return;
         }
         if (pressed || escape || !focused) {
-            stop_driving("AUTODRIVE: cancelled by toggle, Escape, or focus loss.\r\n",
-                         !drive.event && pressed && focused && !escape &&
-                             autodrive_game_is_freeroam());
+            stop_driving(!drive.event && pressed && focused && !escape &&
+                         autodrive_game_is_freeroam());
             return;
         }
         if (drive.event) {
@@ -217,34 +156,29 @@ static void autodrive_tick(void *satnav, float dt) {
             autodrive_game_release_car(current_car);
             if (!autodrive_game_is_unpaused() || autodrive_game_driving_input(controller) ||
                 !same_car || autodrive_game_driver_mode(drive.car) != 0) {
-                stop_driving("AUTODRIVE: event driving stopped (pause, input, car or control "
-                             "change).\r\n",
-                             0);
+                stop_driving(0);
             }
             return;
         }
         if (!autodrive_game_is_freeroam()) {
-            stop_driving("AUTODRIVE: stopped when free roam was paused or left.\r\n", 0);
+            stop_driving(0);
             return;
         }
         if (autodrive_game_driving_input(controller)) {
-            stop_driving("AUTODRIVE: cancelled by steering, throttle or braking.\r\n", 1);
+            stop_driving(1);
             return;
         }
         void *current_car = autodrive_game_get_car();
         int same_car = current_car == drive.car;
         autodrive_game_release_car(current_car);
         if (!same_car || autodrive_game_driver_mode(drive.car) != 0) {
-            stop_driving("AUTODRIVE: stopped on car change or a native control change.\r\n", 0);
+            stop_driving(0);
             return;
         }
         int arrived;
         void *route = autodrive_game_route(satnav, &arrived);
         if (arrived || route != drive.route) {
-            stop_driving(
-                arrived ? "AUTODRIVE: GPS destination reached; player control restored.\r\n"
-                        : "AUTODRIVE: GPS route changed or cleared; player control restored.\r\n",
-                1);
+            stop_driving(1);
             return;
         }
         if (dt > 0.0f && dt <= 1.0f) {
@@ -257,18 +191,21 @@ static void autodrive_tick(void *satnav, float dt) {
             autodrive_game_cycle_camera(&drive.camera);
         }
     } else if (focused && pressed && !escape) {
-        start_driving(satnav);
+        start_driving(satnav, controller);
     }
 }
 
 static void satnav_update(void *self, float dt) {
     ((UpdateFn)(game_image + 0x6b4d30))(self, dt);
-    autodrive_tick(self, dt);
+    if (autodrive_enabled) {
+        KeyboardInput input = game_input_read();
+        autodrive_tick(self, dt, input.toggle, input.cancel, input.focused);
+    }
 }
 
 static void satnav_deactivate(void *self) {
     if (self == drive.satnav) {
-        stop_driving("AUTODRIVE: stopped before GPS deactivation.\r\n", 0);
+        stop_driving(0);
     }
     ((ActionFn)(game_image + 0x6c0c70))(self);
 }
@@ -280,7 +217,7 @@ static void tracker_update(void *self, float dt) {
 
 static void *tracker_destroy(void *self, unsigned flags) {
     if (self == drive.tracker) {
-        stop_driving("AUTODRIVE: stopped before route-tracker destruction.\r\n", 0);
+        stop_driving(0);
     }
     if (self == available_tracker) {
         available_tracker = 0;
@@ -289,12 +226,12 @@ static void *tracker_destroy(void *self, unsigned flags) {
 }
 
 static void pause_enter(void *self) {
-    stop_driving("AUTODRIVE: stopped before the game's pause flow.\r\n", 0);
+    stop_driving(0);
     ((ActionFn)(game_image + 0x8e98e0))(self);
 }
 
 static void event_context_enter(void *self) {
-    stop_driving("AUTODRIVE: stopped before an event-context transition.\r\n", 0);
+    stop_driving(0);
     ((ActionFn)(game_image + 0x912860))(self);
 }
 
@@ -329,6 +266,8 @@ void autodrive_prepare_hooks(unsigned char *image, const ModOptions *options) {
                          (uintptr_t)autodrive_ui_present};
     game_image = image;
     autodrive_game_bind(image);
+    vehicle_controls_bind(image);
+    autodrive_enabled = options->autodrive;
     autodrive_notice_prepare(image);
     autodrive_ui_prepare(image);
     cinematic_enabled = options->autodrive_cinematic;
@@ -353,13 +292,6 @@ void autodrive_prepare_hooks(unsigned char *image, const ModOptions *options) {
 }
 
 #ifdef FH2_TWEAKS_TEST
-__declspec(dllexport) void Fh2TestAutodriveInput(int f2, int escape, int focus) {
-    test_input = 1;
-    test_f2 = f2;
-    test_escape = escape;
-    test_focus = focus;
-}
-
 __declspec(dllexport) int Fh2TestAutodriveState(void) {
     return drive.car ? (drive.cinematic ? 2 : 1) : 0;
 }

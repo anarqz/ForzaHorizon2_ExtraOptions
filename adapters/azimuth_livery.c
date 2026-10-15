@@ -32,13 +32,42 @@ static const HostPatchSet mask_patch_set_097 = {0x104320,          MASK_HELPER_S
                                                 original_hash_097, patched_hash_097,
                                                 mask_patches,      ARRAY_COUNT(mask_patches)};
 
+static const unsigned char mask_original_hash_098[32] = {
+    0x52, 0x98, 0xe9, 0x2f, 0xa1, 0x14, 0xfe, 0xbc, 0xc3, 0x35, 0xa7, 0xaf, 0x69, 0xd2, 0x78, 0x1d,
+    0x1c, 0xbd, 0x2f, 0x44, 0xa5, 0x55, 0x93, 0xea, 0xaf, 0xdd, 0x4a, 0x65, 0x6b, 0xbf, 0x9f, 0x75};
+
+static const unsigned char mask_patched_hash_098[32] = {
+    0xc1, 0x4a, 0x0f, 0xce, 0xab, 0xe9, 0xce, 0x31, 0x6d, 0x97, 0x96, 0x51, 0xa6, 0xb2, 0x8c, 0x9d,
+    0x73, 0xeb, 0x2c, 0xa7, 0x23, 0x3b, 0x32, 0x33, 0x2b, 0x49, 0xb6, 0x87, 0x28, 0xb5, 0xcf, 0x72};
+
+static const HostPatchSet mask_patch_set_098 = {
+    0x1046c0,     MASK_HELPER_SIZE,         mask_original_hash_098, mask_patched_hash_098,
+    mask_patches, ARRAY_COUNT(mask_patches)};
+
+static const unsigned char mask_original_hash_099[32] = {
+    0xec, 0xa7, 0xbe, 0xe6, 0xc4, 0x80, 0xc3, 0xe8, 0xab, 0x13, 0x5b, 0xc3, 0xf6, 0x3a, 0x47, 0x76,
+    0xab, 0xaa, 0x43, 0x1c, 0x7b, 0x44, 0xae, 0x99, 0x5b, 0x91, 0x8a, 0x91, 0x82, 0x19, 0xf8, 0x4b};
+static const unsigned char mask_patched_hash_099[32] = {
+    0x7e, 0x23, 0x14, 0x3f, 0x8f, 0x6a, 0xbd, 0xeb, 0x9c, 0x57, 0x52, 0x72, 0xe1, 0x3a, 0xe6, 0xfd,
+    0xf3, 0x80, 0x6e, 0xca, 0xc3, 0x0e, 0xee, 0x08, 0x63, 0xa6, 0xc7, 0x09, 0x94, 0xe9, 0x5f, 0xa3};
+static const HostPatchSet mask_patch_set_099 = {0x13dc40,
+                                                0x2ea,
+                                                mask_original_hash_099,
+                                                mask_patched_hash_099,
+                                                mask_patches,
+                                                ARRAY_COUNT(mask_patches)};
+
 static int apply_livery(unsigned char *base) {
+    static const HostPatchSet *const versions[] = {
+        [AZIMUTH_096] = &mask_patch_set,
+        [AZIMUTH_097] = &mask_patch_set_097,
+        [AZIMUTH_098] = &mask_patch_set_098,
+        [AZIMUTH_099] = &mask_patch_set_099,
+    };
     AzimuthBuild build = azimuth_host_build(base);
-    if (build == AZIMUTH_UNKNOWN) {
-        return 0;
-    }
-    return azimuth_patch_host_code(base,
-                                   build == AZIMUTH_097 ? &mask_patch_set_097 : &mask_patch_set);
+    return build > AZIMUTH_UNKNOWN && build < ARRAY_COUNT(versions)
+               ? azimuth_patch_host_code(base, versions[build])
+               : 0;
 }
 
 void azimuth_apply_livery_compatibility(void) {

@@ -3,10 +3,8 @@
 #define FH2_PATCHES_GENERATED_H
 #include "extra_options.h"
 
-#define FIXED_PATCH_COUNT 54
+#define FIXED_PATCH_COUNT 77
 #define MAX_PATCH_SIZE 177
 extern const PatchDefinition fixed_patches[FIXED_PATCH_COUNT];
 extern const unsigned char game_file_sha256[32];
-extern const unsigned char *const language_audio_init_targets[LANGUAGE_COUNT];
-extern const unsigned char *const language_text_init_targets[LANGUAGE_COUNT];
 #endif

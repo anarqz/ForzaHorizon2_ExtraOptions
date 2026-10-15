@@ -6,11 +6,15 @@
 #define NOTICE_DURATION 2.2f
 #define CONVERTER_SLOT 0x2ecf6c8
 #define CONVERTER_FUNCTION 0x140a800
+#define ENABLED_TEXT_KEY 0xdfd4u
 
 typedef void **(*ConverterFn)(void *, void **, void *, void *, void *, void *);
 typedef void **(*StatusFactory)(void **);
 typedef void (*StatusCategory)(void *, void *);
 typedef void **(*StringFactory)(void **, const char **);
+typedef unsigned short (*StringTableId)(void *, const char *);
+typedef const wchar_t *(*LocalizedText)(void *, unsigned short, unsigned);
+typedef void **(*WideStringFactory)(void **, const wchar_t **);
 typedef void (*StatusConfigure)(void *, int, void **);
 typedef void (*StatusSubmit)(void *, void **);
 typedef void (*StatusRemove)(void *, void *, void **, unsigned char);
@@ -77,10 +81,19 @@ static int is_notice_value(void *value, void *parameter) {
 static void **notice_convert(void *self, void **out, void *value, void *type, void *parameter,
                              void *culture) {
     if (out && is_notice_value(value, parameter)) {
-        const char *text = "ENABLED";
-        ((StringFactory)(game + 0x3d9820))(out, &text);
-        if (*out) {
-            return out;
+        void *manager;
+        // GameOptionValues:IDS_DisplayName_29 is the singular "On" option value.
+        if (memory_read(game + 0x3662990, &manager, sizeof(manager)) && manager) {
+            unsigned short table = ((StringTableId)(game + 0x123d940))(manager, "GameOptionValues");
+            const wchar_t *text =
+                ((LocalizedText)(game + 0x123d780))(manager, table, ENABLED_TEXT_KEY);
+            wchar_t first;
+            if (text && memory_read(text, &first, sizeof(first)) && first) {
+                ((WideStringFactory)(game + 0xb943d0))(out, &text);
+                if (*out) {
+                    return out;
+                }
+            }
         }
     }
     return original_converter(self, out, value, type, parameter, culture);
