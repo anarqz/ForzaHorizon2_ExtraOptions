@@ -540,9 +540,159 @@ static void menu_add_friend(void) {
 }
 
 
+/* HOSPEDAR MUNDO / ENCERRAR MUNDO (azimuth_world.c). */
+static void menu_world_stop(void) {
+    azimuth_world_stop();
+    menu_info(L"WORLD CLOSED", L"Your world is closed. The players in it go back to their own free roam.");
+}
+
+static void menu_world_status(void) {
+    char visibility[16];
+    int has_password = 0;
+    unsigned max_players = 0, port = 0;
+    static wchar_t number[16];
+    azimuth_world_describe(visibility, sizeof(visibility), &has_password, &max_players, &port);
+    line_start();
+    line_add(L"Your world is open. Go to FREE ROAM ONLINE to enter it; the players the server sends you meet you there.\n\nPlayers: ");
+    unsigned v = azimuth_world_players(), n = 0;
+    wchar_t digits[12];
+    do {
+        digits[n++] = (wchar_t)(L'0' + v % 10);
+        v /= 10;
+    } while (v);
+    for (unsigned i = 0; i < n; ++i) number[i] = digits[n - 1 - i];
+    number[n] = L'/';
+    v = max_players;
+    unsigned m = 0;
+    do {
+        digits[m++] = (wchar_t)(L'0' + v % 10);
+        v /= 10;
+    } while (v);
+    for (unsigned i = 0; i < m; ++i) number[n + 1 + i] = digits[m - 1 - i];
+    number[n + 1 + m] = 0;
+    menu_line_raw(number);
+    line_add(!azimuth_world_listed() ? L"\nPrivate session: it is not on the list; friends join it from your player card."
+             : has_password ? L"\nWith a password: it is not on the list; friends join it from your player card."
+             : visibility[0] == 'f' ? L"\nFriends only."
+             : visibility[0] == 'o' ? L"\nPrivate: nobody finds it."
+                                    : L"\nOn the list for everybody.");
+    line_add(L"\nTo close it, go back to HORIZON SOLO (Start).");
+    line_add(L"\n\nSettings (name, password, players, friends only): ");
+    menu_line_raw(azimuth_world_config_path());
+    line_add(L"\nThey apply the next time you open the world.");
+    static const MenuButton buttons[2] = {{L"OK", menu_nothing}, {L"Close world", menu_world_stop}};
+    menu_popup(L"HOST WORLD", menu_line, buttons, 2);
+}
+
+static void menu_world_open(void) {
+    const wchar_t *why = L"";
+    if (azimuth_world_start(&why)) {
+        menu_world_status();
+    } else {
+        menu_info(L"HOST WORLD", why);
+    }
+}
+
+static void menu_world(void) {
+    if (azimuth_world_hosting()) {
+        menu_world_status();
+        return;
+    }
+    static const MenuButton buttons[2] = {{L"Host", menu_world_open}, {L"Cancel", menu_nothing}};
+    menu_popup(L"HOST WORLD",
+               L"Your world will be public: anyone who goes to FREE ROAM ONLINE can be sent to it.\n\n"
+               L"For a world only your friends join, use the game's private online session instead.",
+               buttons, 2);
+}
+
+/* FIND WORLD: the open worlds, one at a time. A friend's world is offered as is; a stranger's
+   comes with a warning (its relay could be hostile; FREE ROAM ONLINE goes straight only to
+   friends' worlds). Enter chooses it for the next FREE ROAM ONLINE; Keep looking shows the
+   next; Leave closes. */
+static unsigned long long menu_find_after, menu_find_id;
+static wchar_t menu_find_host[64];
+
+static void menu_find_next(void);
+
+static void menu_find_enter(void) {
+    char error[200];
+    static wchar_t text[300];
+    if (!azimuth_world_join(menu_find_id, "", error, sizeof(error))) {
+        MultiByteToWideChar(CP_UTF8, 0, error, -1, text, (int)ARRAY_COUNT(text));
+        menu_info(L"FIND WORLD", text);
+        return;
+    }
+    line_start();
+    line_add(L"Done. Go to FREE ROAM ONLINE to enter the world of ");
+    menu_line_raw(menu_find_host);
+    line_add(L". If you are online now, go back to HORIZON SOLO first.");
+    menu_info(L"FIND WORLD", menu_line);
+}
+
+static void menu_find_more(void) {
+    menu_find_after = menu_find_id;
+    menu_find_next();
+}
+
+static void menu_find_next(void) {
+    char name[96], host[64];
+    unsigned players = 0, max_players = 0;
+    int friend_world = 0;
+    static wchar_t text[128];
+    unsigned long long id = 0;
+    int found = azimuth_world_browse(menu_find_after, &id, name, sizeof(name), host, sizeof(host), &players,
+                                     &max_players, &friend_world);
+    if (found < 0) {
+        menu_retry(L"FIND WORLD", L"The server did not answer.", menu_find_next);
+        return;
+    }
+    if (!found) {
+        menu_info(L"FIND WORLD", menu_find_after ? L"There are no more open worlds right now."
+                                                 : L"There is no open world right now. Ask a friend to host one, or host your own (HOST WORLD).");
+        return;
+    }
+    menu_find_id = id;
+    MultiByteToWideChar(CP_UTF8, 0, host, -1, menu_find_host, (int)ARRAY_COUNT(menu_find_host));
+    line_start();
+    if (!friend_world) {
+        line_add(L"This world belongs to a player who is not your friend. Joining a stranger's world can be unsafe: Infinity has safety checks, but as an open-source project, ill-intentioned players may find ways around them that we cannot foresee. Prefer playing online only with people you know.\n\n");
+    }
+    MultiByteToWideChar(CP_UTF8, 0, name, -1, text, (int)ARRAY_COUNT(text));
+    menu_line_raw(text);
+    line_add(L" (");
+    menu_line_raw(menu_find_host);
+    line_add(L")\nPlayers: ");
+    wchar_t digits[12];
+    unsigned v = players, n = 0;
+    do {
+        digits[n++] = (wchar_t)(L'0' + v % 10);
+        v /= 10;
+    } while (v);
+    for (unsigned i = 0; i < n; ++i) text[i] = digits[n - 1 - i];
+    text[n] = L'/';
+    v = max_players;
+    unsigned m = 0;
+    do {
+        digits[m++] = (wchar_t)(L'0' + v % 10);
+        v /= 10;
+    } while (v);
+    for (unsigned i = 0; i < m; ++i) text[n + 1 + i] = digits[m - 1 - i];
+    text[n + 1 + m] = 0;
+    menu_line_raw(text);
+    static const MenuButton buttons[3] = {{L"Enter", menu_find_enter}, {L"Keep looking", menu_find_more},
+                                          {L"Leave", menu_nothing}};
+    menu_popup(friend_world ? L"FIND WORLD" : L"UNKNOWN WORLD", menu_line, buttons, 3);
+}
+
+static void menu_find_world(void) {
+    menu_find_after = 0;
+    menu_find_next();
+}
+
 static void menu_test_connection(void) {
-    static wchar_t report[600];
+    static wchar_t report[2400];
     azimuth_account_test(report, ARRAY_COUNT(report));
+    azimuth_proxy_nat_test(report, ARRAY_COUNT(report));
     menu_info(L"TEST CONNECTION", report);
 }
 
@@ -605,8 +755,8 @@ static void menu_about(void) {
 
 /* ------------------------------------------------------- INFINITY screen */
 
-static InfinityTile menu_tiles[8];
-static MenuAction menu_tile_actions[8];
+static InfinityTile menu_tiles[INFINITY_TILE_COUNT];
+static MenuAction menu_tile_actions[INFINITY_TILE_COUNT];
 
 static void menu_set_tile(int i, const char *heading, const char *icon, int photo, MenuAction action) {
     menu_tiles[i].heading = azimuth_tr8(heading);
@@ -616,8 +766,8 @@ static void menu_set_tile(int i, const char *heading, const char *icon, int phot
 }
 
 /* The tiles for the profile's state (slots: 0 and 7 the small PROFILE and UPDATE tiles of the
-   first column, 1-2 wide, 3-6 small icons). The actions are kept with them, so a click does
-   what its tile said. */
+   first column, 1-2 wide, 3-6 small icons; 8 splits slot 1's place in two small tiles). The
+   actions are kept with them, so a click does what its tile said. */
 static const char *menu_update_heading(void) {
     switch (azimuth_update_state()) {
     case UPDATE_INSTALLED:
@@ -636,17 +786,20 @@ const InfinityTile *azimuth_infinity_tiles(void) {
     if (state < 0) {
         return 0;
     }
-    for (int i = 0; i < 8; ++i) {
+    for (int i = 0; i < INFINITY_TILE_COUNT; ++i) {
         menu_set_tile(i, 0, 0, 0, 0);
     }
     menu_set_tile(7, menu_update_heading(), "Icons/TiledMenus/AutoUpgrade.png", 0, menu_update);
     if (state == 2) {
         menu_set_tile(0, "PROFILE", "Icons/TiledMenus/Autoshow.png", 0, menu_profile);
-        menu_set_tile(1, "ADD FRIEND", "PauseMenuTileBackgrounds/MyRivals.png", 1, menu_add_friend);
-        menu_set_tile(2, "TEST CONNECTION", "PauseMenuTileBackgrounds/OnlineFreeroam.png", 1, menu_test_connection);
+        menu_set_tile(1, "ADD FRIEND", "Icons/TiledMenus/TeamCredits.png", 0, menu_add_friend);
+        menu_set_tile(8, azimuth_world_hosting() ? "WORLD OPEN" : "HOST WORLD", "Icons/TiledMenus/BarnFinds.png", 0,
+                      menu_world);
+        menu_set_tile(2, "TEST CONNECTION", "Icons/TiledMenus/Controls.png", 0, menu_test_connection);
+        menu_set_tile(9, "FIND WORLD", "Icons/TiledMenus/CustomUpgrade.png", 0, menu_find_world);
         menu_set_tile(3, "SITE KEY", "Icons/TiledMenus/Options.png", 0, menu_show_key);
         menu_set_tile(4, "SWITCH PROFILE", "Icons/TiledMenus/Garage.png", 0, menu_log_in);
-        menu_set_tile(5, "ABOUT", "Icons/TiledMenus/TeamCredits.png", 0, menu_about);
+        menu_set_tile(5, "ABOUT", "Icons/TiledMenus/Video.png", 0, menu_about);
         menu_set_tile(6, "LEAVE INFINITY", "Icons/TiledMenus/Difficulty.png", 0, menu_confirm_leave);
     } else if (state == 1) {
         menu_set_tile(0, "PROFILE", "Icons/TiledMenus/Autoshow.png", 0, menu_profile);
@@ -678,8 +831,11 @@ static void menu_tile_4(void *page) { menu_tile(4, page); }
 static void menu_tile_5(void *page) { menu_tile(5, page); }
 static void menu_tile_6(void *page) { menu_tile(6, page); }
 static void menu_tile_7(void *page) { menu_tile(7, page); }
-static MenuPageFn const menu_tile_handlers[8] = {menu_tile_0, menu_tile_1, menu_tile_2, menu_tile_3,
-                                                  menu_tile_4, menu_tile_5, menu_tile_6, menu_tile_7};
+static void menu_tile_8(void *page) { menu_tile(8, page); }
+static void menu_tile_9(void *page) { menu_tile(9, page); }
+static MenuPageFn const menu_tile_handlers[INFINITY_TILE_COUNT] = {menu_tile_0, menu_tile_1, menu_tile_2, menu_tile_3,
+                                                                   menu_tile_4, menu_tile_5, menu_tile_6, menu_tile_7,
+                                                                   menu_tile_8, menu_tile_9};
 
 /* The popup version of the menu: used when the INFINITY screen cannot be opened. */
 static void menu_click(void *page) {
@@ -744,13 +900,17 @@ static void menu_click(void *page) {
    item from the list at page+0x4a0 (FUN_140e25a80) and ignores ids it does not know.
    Right after SHOW GAMERCARD (id 1, the first) one more item goes in: ADD FRIEND, REMOVE
    FRIEND, CANCEL or ACCEPT FRIEND REQUEST, from the server's answer; choosing it asks the
-   server again and adds or removes. */
+   server again and adds or removes. When the player is in a free roam world (hosting it or
+   playing in it), JOIN WORLD follows: it chooses that world for this player's next FREE ROAM
+   ONLINE (azimuth_world.c). */
 #define ACTIONS_ADD_RVA 0xdfec20u
 #define ACTIONS_ITEM_RVA 0xdf3730u
 #define ACTIONS_SELECTED_RVA 0xe080a0u
 #define ACTIONS_CURRENT_RVA 0xe25a80u
 #define GAME_OBJECT_FREE_RVA 0x257730u
 #define ACTION_FRIEND 0x40000000
+#define ACTION_WORLD 0x40000001
+#define ACTION_REPORT 0x40000002
 
 static const unsigned char actions_add_bytes[15] = {0x4c, 0x89, 0x44, 0x24, 0x18, 0x48, 0x89, 0x54,
                                                     0x24, 0x10, 0x57, 0x48, 0x83, 0xec, 0x30};
@@ -767,7 +927,7 @@ typedef unsigned long long (*PlayerXuidFn)(void *);
 
 static ActionsAddFn actions_add_original;
 static ActionsSelectedFn actions_selected_original;
-static unsigned long long actions_xuid;
+static unsigned long long actions_xuid, actions_world_xuid, actions_report_xuid;
 
 /* The game's reference count (+0x10); the object goes when it reaches 0. */
 static void game_object_release(void *object) {
@@ -782,29 +942,12 @@ static unsigned long long actions_player(void *page) {
     return player ? ((PlayerXuidFn)(*(void ***)player)[0x38 / sizeof(void *)])(player) : 0;
 }
 
-static void actions_add(void *page, void **list, void **item) {
-    void *collection = list ? *list : 0;
-    int id = item && *item ? *(int *)((unsigned char *)*item + 0x68) : 0;
-    unsigned mask = *(unsigned *)((unsigned char *)page + 0x4e0);
-    actions_add_original(page, list, item);
-    if (id != 1 || !(mask & 1) || !collection) {
-        return;
-    }
-    unsigned long long xuid = actions_player(page);
-    int state = azimuth_account_friend_state(xuid);
-    if (state < 0) {
-        return; /* offline, no profile, or the player is not on this server */
-    }
-    actions_xuid = xuid;
-    MenuText *text = menu_text(azimuth_tr(state == 2   ? L"REMOVE FRIEND"
-                                          : state == 1 ? L"CANCEL FRIEND REQUEST"
-                                          : state == 3 ? L"ACCEPT FRIEND REQUEST"
-                                                       : L"ADD FRIEND"));
+static void actions_insert(void *collection, int action, const wchar_t *label) {
+    MenuText *text = menu_text(azimuth_tr(label));
     if (!text) {
         return;
     }
     void *made = 0;
-    int action = ACTION_FRIEND;
     ((ActionsItemFn)(uintptr_t)(menu_game + ACTIONS_ITEM_RVA))(&made, &action, (void **)&text);
     menu_text_release(text);
     if (!made) {
@@ -815,6 +958,128 @@ static void actions_add(void *page, void **list, void **item) {
     unsigned count = *(unsigned *)(*(unsigned char **)((unsigned char *)collection + 0x50) + 0x30);
     ((ActionsInsertFn)table[0x40 / sizeof(void *)])(collection, count, made, table, -2);
     game_object_release(made);
+}
+
+/* Diagnostic (once): the PLAYER ACTIONS page's vtable and its slot +0x5b8, which the game's
+   keyboard calls on the page that opened it (the password of JOIN WORLD needs to know it). */
+static void actions_log_page(void *page) {
+    static volatile LONG logged;
+    if (InterlockedExchange(&logged, 1)) {
+        return;
+    }
+    static const char hex[] = "0123456789abcdef";
+    unsigned char *vtable = page ? *(unsigned char **)page : 0;
+    void *slot = 0;
+    if (vtable) {
+        memory_read(vtable + 0x5b8, &slot, sizeof(slot));
+    }
+    unsigned long long values[2] = {(unsigned long long)(vtable - menu_game),
+                                    (unsigned long long)((unsigned char *)slot - menu_game)};
+    char text[96] = "MENU: player actions page vtable game+0000000000 slot 0x5b8 game+0000000000\r\n";
+    unsigned at[2] = {38, 65};
+    for (int v = 0; v < 2; ++v) {
+        for (int i = 0; i < 10; ++i) {
+            text[at[v] + i] = hex[(values[v] >> (4 * (9 - i))) & 15];
+        }
+    }
+    log_append(text);
+}
+
+static void actions_add(void *page, void **list, void **item) {
+    void *collection = list ? *list : 0;
+    int id = item && *item ? *(int *)((unsigned char *)*item + 0x68) : 0;
+    unsigned mask = *(unsigned *)((unsigned char *)page + 0x4e0);
+    actions_add_original(page, list, item);
+    if (id != 1 || !(mask & 1) || !collection) {
+        return;
+    }
+    actions_log_page(page);
+    unsigned long long xuid = actions_player(page);
+    int state = azimuth_account_friend_state(xuid);
+    if (state < 0) {
+        return; /* offline, no profile, or the player is not on this server */
+    }
+    actions_xuid = xuid;
+    actions_insert(collection, ACTION_FRIEND,
+                   state == 2   ? L"REMOVE FRIEND"
+                   : state == 1 ? L"CANCEL FRIEND REQUEST"
+                   : state == 3 ? L"ACCEPT FRIEND REQUEST"
+                                : L"ADD FRIEND");
+    char host[64], why[16];
+    int password = 0;
+    if (azimuth_world_of(xuid, host, sizeof(host), &password, why, sizeof(why)) == 1) {
+        actions_world_xuid = xuid;
+        actions_insert(collection, ACTION_WORLD, L"JOIN WORLD");
+    }
+    /* any other player with a profile on this server (a leaderboard's, a club's, a friend) */
+    actions_report_xuid = xuid;
+    actions_insert(collection, ACTION_REPORT, L"REPORT PLAYER");
+}
+
+/* REPORT PLAYER: sent once confirmed. */
+static void actions_report_send(void) {
+    static wchar_t message[400];
+    if (!azimuth_account_report(actions_report_xuid, message, ARRAY_COUNT(message))) {
+        menu_retry(L"REPORT PLAYER", message, actions_report_send);
+        return;
+    }
+    menu_info(L"REPORT PLAYER", message);
+}
+
+static void actions_report(void) {
+    static const MenuButton buttons[2] = {{L"REPORT", actions_report_send}, {L"CANCEL", menu_nothing}};
+    menu_popup(L"REPORT PLAYER",
+               L"Report this player to the server's moderation? Use it for cheating: impossible times or scores, "
+               L"modified cars, a garage or credits nobody could have. When five different players report the same "
+               L"account, moderation looks at it; an account found cheating has its progress reset.",
+               buttons, 2);
+}
+
+/* JOIN WORLD: the world the player is in becomes this player's next FREE ROAM ONLINE. */
+static void actions_world(void) {
+    static wchar_t text[300];
+    char host[64], why[16], error[200];
+    int password = 0;
+    int found = azimuth_world_of(actions_world_xuid, host, sizeof(host), &password, why, sizeof(why));
+    if (found < 0) {
+        menu_retry(L"JOIN WORLD", L"The server did not answer.", actions_world);
+        return;
+    }
+    if (!found) {
+        menu_info(L"JOIN WORLD", L"This player is not in a world anymore.");
+        return;
+    }
+    if (why[0] == 'c') {
+        line_start();
+        line_add(L"Your car database is different from the one of ");
+        MultiByteToWideChar(CP_UTF8, 0, host, -1, text, (int)ARRAY_COUNT(text));
+        menu_line_raw(text);
+        line_add(L": different cars installed (imported or modified) keep you from playing together.");
+        menu_info(L"JOIN WORLD", menu_line);
+        return;
+    }
+    if (why[0]) {
+        menu_info(L"JOIN WORLD", why[0] == 'f' && why[1] == 'u'   ? L"The world is full."
+                                 : why[0] == 'f'                  ? L"Only the host's friends can join this world."
+                                 : why[0] == 'b'                  ? L"The host does not let you join this world."
+                                                                  : L"This world is private.");
+        return;
+    }
+    if (password) {
+        menu_info(L"JOIN WORLD", L"This world has a password. Typing it here comes in the next version.");
+        return;
+    }
+    if (!azimuth_world_join(actions_world_xuid, "", error, sizeof(error))) {
+        MultiByteToWideChar(CP_UTF8, 0, error, -1, text, (int)ARRAY_COUNT(text));
+        menu_info(L"JOIN WORLD", text);
+        return;
+    }
+    line_start();
+    line_add(L"Done. Go to FREE ROAM ONLINE to enter the world of ");
+    MultiByteToWideChar(CP_UTF8, 0, host, -1, text, (int)ARRAY_COUNT(text));
+    menu_line_raw(text);
+    line_add(L". If you are online now, go back to HORIZON SOLO first.");
+    menu_info(L"JOIN WORLD", menu_line);
 }
 
 static void actions_friend(void) {
@@ -839,11 +1104,21 @@ static void actions_selected(void *page, char flag) {
     }
     int id = current ? *(int *)((unsigned char *)current + 0x68) : 0;
     game_object_release(current);
-    if (id != ACTION_FRIEND) {
+    if (id != ACTION_FRIEND && id != ACTION_WORLD && id != ACTION_REPORT) {
         actions_selected_original(page, flag);
         return;
     }
     menu_page = page;
+    if (id == ACTION_REPORT) {
+        actions_report_xuid = actions_player(page);
+        actions_report();
+        return;
+    }
+    if (id == ACTION_WORLD) {
+        actions_world_xuid = actions_player(page);
+        actions_world();
+        return;
+    }
     actions_xuid = actions_player(page);
     actions_friend();
 }
@@ -951,17 +1226,18 @@ static void menu_infinity_click(void *page) {
 }
 
 /* After the game binds its own tiles, ours: PART_Button_Infinity on Settings and
-   PART_Button_I0..I7 on the INFINITY screen (the same page class; a page has only its own
+   PART_Button_I0..I9 on the INFINITY screen (the same page class; a page has only its own
    buttons, binding a missing name does nothing). A handler is a member-function pointer pair
    {function, this adjustment}. */
 static void menu_init(void *page) {
-    static void *handlers[9][2];
-    static const char *const names[9] = {"PART_Button_Infinity", "PART_Button_I0", "PART_Button_I1",
-                                         "PART_Button_I2",       "PART_Button_I3", "PART_Button_I4",
-                                         "PART_Button_I5",       "PART_Button_I6", "PART_Button_I7"};
+    static void *handlers[INFINITY_TILE_COUNT + 1][2];
+    static const char *const names[INFINITY_TILE_COUNT + 1] = {
+        "PART_Button_Infinity", "PART_Button_I0", "PART_Button_I1", "PART_Button_I2", "PART_Button_I3",
+        "PART_Button_I4",       "PART_Button_I5", "PART_Button_I6", "PART_Button_I7", "PART_Button_I8",
+        "PART_Button_I9"};
     MenuBindButtonFn bind = (MenuBindButtonFn)(uintptr_t)(menu_game + MENU_BIND_BUTTON_RVA);
     menu_init_original(page);
-    for (int i = 0; i < 9; ++i) {
+    for (int i = 0; i < INFINITY_TILE_COUNT + 1; ++i) {
         handlers[i][0] = (void *)(uintptr_t)(i ? menu_tile_handlers[i - 1] : menu_infinity_click);
         bind(page, names[i], (void *const *)handlers[i]);
     }

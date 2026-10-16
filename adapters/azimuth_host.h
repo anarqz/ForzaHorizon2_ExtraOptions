@@ -56,6 +56,16 @@ int azimuth_cloud_upload_offline(const wchar_t *bin, const wchar_t *token, const
 /* azimuth_account.c: the player's FH2Online account on that server. */
 void azimuth_apply_account(const wchar_t *directory);
 const wchar_t *azimuth_account_token(void);
+/* azimuth_proxy.c (F3): the joining player's UDP proxy between the game and a world on another
+   PC (STUN, the punch exchange, the source filter). start returns 1 with `local` (a 28-byte
+   sockaddr_in6) when the game should send there instead of `world`. */
+void azimuth_proxy_configure(int direct);
+int azimuth_proxy_start(const void *world, void *local);
+void azimuth_proxy_stop(void);
+/* TEST CONNECTION's free roam part (about 1.5 s: STUN from a socket of its own). */
+void azimuth_proxy_nat_test(wchar_t *out, size_t cap);
+/* azimuth_world.c: dedicated_server.net while this PC hosts a world (1), else 0. */
+int azimuth_world_net_text(char *out, size_t cap);
 /* -1 unavailable, 0 no account, 1 account kept but offline profile, 2 playing online */
 int azimuth_account_state(void);
 const wchar_t *azimuth_account_gamertag(void);
@@ -75,6 +85,8 @@ const wchar_t *azimuth_account_notice(void);
    3 they asked, 0 neither, -1 unknown; and adding / removing them. */
 int azimuth_account_friend_state(unsigned long long xuid);
 int azimuth_account_friend_change(unsigned long long xuid, int add, wchar_t *message, size_t cap);
+/* REPORT PLAYER (azimuth_online_menu.c): 1 sent, 0 not (`message` says why). */
+int azimuth_account_report(unsigned long long xuid, wchar_t *message, size_t cap);
 /* azimuth_lang.c: Infinity's texts in Portuguese (Brazil) when the game runs in it, else in
    English. azimuth_tr / azimuth_tr8 look a text up by its English. */
 void azimuth_lang_set_portuguese(int on);
@@ -90,6 +102,39 @@ const wchar_t *azimuth_update_text(void);
 void azimuth_account_test(wchar_t *out, size_t cap);
 int azimuth_account_banner(char *out, size_t cap, const char **color);
 
+/* azimuth_net.c: an HSTRING made by Azimuth's WindowsCreateString. */
+HRESULT azimuth_net_make_hstring(const wchar_t *text, void **out);
+/* azimuth_freeroam.c: free roam online ([FreeRoam] Enabled=1). The filter may wrap a WinRT
+   class's statics that Azimuth answered; it returns 1 if it did. */
+void azimuth_apply_freeroam(unsigned char *game_image, const wchar_t *directory, const wchar_t *executable);
+int azimuth_freeroam_filter(const wchar_t *name, const void *iid, void **out);
+/* Cuts the game's traffic to the world it is in (the car database changed). */
+void azimuth_freeroam_cut(void);
+/* azimuth_world.c: the world this player hosts (HOSPEDAR MUNDO). */
+void azimuth_world_set_directory(const wchar_t *directory);
+int azimuth_world_hosting(void);
+unsigned azimuth_world_players(void);
+const wchar_t *azimuth_world_config_path(void);
+int azimuth_world_start(const wchar_t **why);
+int azimuth_world_listed(void);
+void azimuth_world_left(void);
+/* The SHA-256 of the game's car database (X-Fh2-CarDb), hashed on a thread at start. */
+void azimuth_world_hash_car_db(const wchar_t *executable);
+const wchar_t *azimuth_world_car_db_header(void);
+/* Waits while the car database is still being hashed (at most `ms`). */
+void azimuth_world_car_db_wait(unsigned ms);
+/* The world a player is in (1, 0 none, -1 no answer), and choosing it for the next FREE ROAM
+   ONLINE (ENTRAR NO MUNDO). */
+int azimuth_world_of(unsigned long long xuid, char *host, size_t host_capacity, int *password, char *why,
+                     size_t why_capacity);
+int azimuth_world_join(unsigned long long host, const char *password, char *error, size_t error_capacity);
+/* FIND WORLD: the next open world after the one of `after` (1 found, 0 none, -1 no answer). */
+int azimuth_world_browse(unsigned long long after, unsigned long long *id, char *name, size_t name_capacity, char *host,
+                         size_t host_capacity, unsigned *players, unsigned *max_players, int *friend_world);
+void azimuth_world_on_request(const wchar_t *method, const wchar_t *url, const unsigned char *body, size_t size);
+void azimuth_world_stop(void);
+void azimuth_world_describe(char *visibility, size_t visibility_capacity, int *has_password,
+                            unsigned *max_players, unsigned *port);
 /* azimuth_expansions.c: Storm Island for profiles that have it (the server's /me lists it). */
 void azimuth_apply_expansions(unsigned char *game_image);
 void azimuth_expansions_granted(void);
@@ -106,7 +151,10 @@ typedef struct {
     const char *icon;
     int photo;
 } InfinityTile;
-/* The 8 tiles for the profile's current state (azimuth_online_menu.c). */
+/* The tiles of the INFINITY screen: 0-7 as before, 8 the small tile next to tile 1 and 9 the
+   small tile next to tile 2 (tiles 1 and 2 are then small too; azimuth_ui.c). */
+#define INFINITY_TILE_COUNT 10
+/* The INFINITY_TILE_COUNT tiles for the profile's current state (azimuth_online_menu.c). */
 const InfinityTile *azimuth_infinity_tiles(void);
 /* azimuth_ui.c: the CREDITS + INFINITY tiles in Settings, the INFINITY screen and the
    pause menu's status line. */

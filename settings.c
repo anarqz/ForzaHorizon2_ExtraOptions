@@ -104,7 +104,7 @@ static int known_section(const char *name) {
     if (text_equal_ignore_case(name, "Camera") || text_equal_ignore_case(name, "Graphics") ||
         text_equal_ignore_case(name, "HUD") || text_equal_ignore_case(name, "General") ||
         text_equal_ignore_case(name, "Language") || text_equal_ignore_case(name, "Network") ||
-        text_equal_ignore_case(name, "Account")) {
+        text_equal_ignore_case(name, "Account") || text_equal_ignore_case(name, "FreeRoam")) {
         return 1;
     }
     for (size_t index = 0; index < setting_count; ++index) {
@@ -259,6 +259,23 @@ static int parse_ini(char *text, ModOptions *options) {
            skips the account, it does not refuse the whole file). */
         if (text_equal_ignore_case(section, "Account")) {
             if (text_equal_ignore_case(key, "Name")) {
+                continue;
+            }
+            goto invalid;
+        }
+        /* FH2Online: [FreeRoam] is read by adapters/azimuth_freeroam.c: Enabled 1 (default) or
+           0, World, a host:port that overrides the session's world (empty = none), and Direct 0
+           (default) or 1 (no proxy for the joining side). */
+        if (text_equal_ignore_case(section, "FreeRoam")) {
+            if (text_equal_ignore_case(key, "Enabled") &&
+                (text_equal_ignore_case(value, "0") || text_equal_ignore_case(value, "1"))) {
+                continue;
+            }
+            if (text_equal_ignore_case(key, "World")) {
+                continue;
+            }
+            if (text_equal_ignore_case(key, "Direct") &&
+                (text_equal_ignore_case(value, "0") || text_equal_ignore_case(value, "1"))) {
                 continue;
             }
             goto invalid;

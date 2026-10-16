@@ -82,6 +82,12 @@ int runtime_initialize(unsigned char *game_image, const wchar_t *executable_path
         azimuth_apply_livery_compatibility();
         azimuth_apply_save_compatibility(options.disable_azimuth_save_checksums);
         azimuth_apply_network(settings_directory);
+        /* the car database's SHA-256 goes with every request (the server only lets the game's
+           own cars play online) */
+        if (azimuth_net_proxy_enabled()) {
+            azimuth_world_hash_car_db(executable_path);
+        }
+        azimuth_apply_freeroam(game_image, settings_directory, executable_path);
         azimuth_apply_account(settings_directory);
         azimuth_apply_ui(game_image);
         azimuth_apply_online_menu(game_image);

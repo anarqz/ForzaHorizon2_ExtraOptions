@@ -117,6 +117,14 @@ static const char azimuth_ini_template[] =
     "Mode=Proxy\r\n"
     "\r\n"
     "; The ForzaInfinity server: https://host or host:port.\r\n"
-    "Server=https://infinity.anarqz.dev\r\n";
+    "Server=https://infinity.anarqz.dev\r\n"
+    "\r\n"
+    "[FreeRoam]\r\n"
+    "; ForzaInfinity: online free roam, in worlds the players host (Settings > INFINITY > HOST WORLD).\r\n"
+    "; 1 = on, 0 = off.\r\n"
+    "Enabled=1\r\n"
+    "; 1 sends the game straight to a world, without the proxy that gets it through routers.\r\n"
+    "; For troubleshooting only (docs/FREEROAM.md).\r\n"
+    "Direct=0\r\n";
 
 #endif

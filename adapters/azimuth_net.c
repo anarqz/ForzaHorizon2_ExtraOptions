@@ -770,6 +770,13 @@ static int net_forward(NetRequest *request, HRESULT *error) {
                   !buffer_append_wide(&headers, token) || !buffer_append_wide(&headers, L"\r\n"))) {
         goto done;
     }
+    /* the car database's SHA-256: the server only lets the game's own cars play online, and free
+       roam worlds only join the same cars (azimuth_world.c) */
+    azimuth_world_car_db_wait(15000);
+    const wchar_t *car_db = azimuth_world_car_db_header();
+    if (car_db && (!buffer_append_wide(&headers, car_db) || !buffer_append_wide(&headers, L"\r\n"))) {
+        goto done;
+    }
     session = http_open(L"FH2Online/1", WINHTTP_ACCESS_TYPE_NO_PROXY, WINHTTP_NO_PROXY_NAME,
                         WINHTTP_NO_PROXY_BYPASS, 0);
     if (!session) {
@@ -967,21 +974,38 @@ int azimuth_net_auto_update(void) {
 static DWORD net_request(const wchar_t *method, const wchar_t *path, const wchar_t *headers,
                          const wchar_t *content_type, const void *body, size_t body_size, void *out,
                          size_t capacity, size_t *received, int timeout_ms) {
-    /* the game's language, for the server's messages (X-Fh2-Lang: pt-BR; English otherwise) */
-    wchar_t joined[512];
-    if (azimuth_lang_portuguese()) {
-        static const wchar_t lang[] = L"X-Fh2-Lang: pt-BR";
+    /* the game's language, for the server's messages (X-Fh2-Lang: pt-BR; English otherwise),
+       and the car database's SHA-256 (free roam worlds, azimuth_world.c) */
+    wchar_t joined[640];
+    static const wchar_t lang[] = L"X-Fh2-Lang: pt-BR";
+    azimuth_world_car_db_wait(15000);
+    const wchar_t *extras[2] = {azimuth_lang_portuguese() ? lang : 0, azimuth_world_car_db_header()};
+    if (extras[0] || extras[1]) {
         size_t n = 0;
-        while (headers && headers[n] && n + 3 + ARRAY_COUNT(lang) < ARRAY_COUNT(joined)) {
+        int fits = 1;
+        while (headers && headers[n] && n + 1 < ARRAY_COUNT(joined)) {
             joined[n] = headers[n];
             ++n;
         }
-        if (!headers || !headers[n]) {
+        fits = !headers || !headers[n];
+        for (int e = 0; e < 2 && fits; ++e) {
+            if (!extras[e]) {
+                continue;
+            }
+            size_t length = wide_length(extras[e]);
+            if (n + 2 + length + 1 > ARRAY_COUNT(joined)) {
+                fits = 0;
+                break;
+            }
             if (n) {
                 joined[n++] = L'\r';
                 joined[n++] = L'\n';
             }
-            memory_copy(joined + n, lang, sizeof(lang));
+            memory_copy(joined + n, extras[e], length * sizeof(wchar_t));
+            n += length;
+        }
+        if (fits) {
+            joined[n] = 0;
             headers = joined;
         }
     }
@@ -1096,6 +1120,11 @@ static int net_write_all(SequentialStream *stream, const unsigned char *data, si
 static DWORD WINAPI net_worker(void *parameter) {
     NetRequest *request = parameter;
     HRESULT error = NET_OFFLINE_ERROR;
+    if (net_mode == NET_MODE_PROXY && !request->aborted) {
+        /* a private free roam session opens this PC's world before the server sees it */
+        azimuth_world_on_request(buffer_wide(&request->method), buffer_wide(&request->url),
+                                 request->request_body.data, request->request_body.size);
+    }
     int answered = net_mode == NET_MODE_PROXY && !request->aborted && net_forward(request, &error);
     if (request->aborted) {
         answered = 0;
@@ -3037,6 +3066,9 @@ static HRESULT net_get_activation_factory(const wchar_t *name, const void *iid, 
         net_wide_equal(name, L"Windows.Networking.Connectivity.NetworkInformation")) {
         net_netinfo_filter(out);
     }
+    if (SUCCEEDED(result) && *out) {
+        azimuth_freeroam_filter(name, iid, out);
+    }
     if (net_trace_first(name, result)) {
         Buffer line = {0};
         if (buffer_append_text(&line, "WINRT: activate ") &&
@@ -3195,6 +3227,9 @@ static HRESULT net_make_hstring(const wchar_t *text, void **out) {
     }
     NetCreateStringFn create = (NetCreateStringFn)(uintptr_t)(net_azimuth_base + net_offsets->hstring_create);
     return create(text, (unsigned)wide_length(text), out);
+}
+HRESULT azimuth_net_make_hstring(const wchar_t *text, void **out) {
+    return net_azimuth_base && net_offsets ? net_make_hstring(text, out) : E_FAIL;
 }
 static HRESULT STDMETHODCALLTYPE net_result_get_0(NetTokenResult *self, void **out) {
     (void)self;
