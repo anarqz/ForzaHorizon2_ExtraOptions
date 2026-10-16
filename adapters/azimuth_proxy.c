@@ -33,6 +33,10 @@
 #define PX_PACKET 2048
 #define PX_PROBE_MS 250u
 #define PX_GIVE_UP_MS 15000u
+/* Before a world answers, the game's packets go to every candidate for this long at most, then
+   only to the session's address (a host naming someone else's address cannot aim the players'
+   traffic at it for longer). */
+#define PX_SPRAY_MS 30000u
 #define PX_STUN_WAIT_MS 1500u
 #define PX_KEEPALIVE_MS 15000u
 
@@ -465,7 +469,7 @@ static DWORD WINAPI px_thread(void *argument) {
                 if (t) CloseHandle(t);
             }
         }
-        if (!px_have_world && now - last_probe >= PX_PROBE_MS) {
+        if (!px_have_world && now - last_probe >= PX_PROBE_MS && now - started < PX_SPRAY_MS) {
             last_probe = now;
             for (LONG i = 0; i < px_candidate_count && i < PX_CANDIDATES; ++i) {
                 px_binding_request(px_txid[PX_STUN_SERVERS], &px_candidates[i]);
@@ -518,7 +522,8 @@ static DWORD WINAPI px_thread(void *argument) {
             if (px_have_world) {
                 px_send(packet, n, &px_world);
             } else {
-                for (LONG i = 0; i < px_candidate_count && i < PX_CANDIDATES; ++i) {
+                LONG targets = now - started < PX_SPRAY_MS ? px_candidate_count : 1;
+                for (LONG i = 0; i < targets && i < PX_CANDIDATES; ++i) {
                     px_send(packet, n, &px_candidates[i]);
                 }
             }

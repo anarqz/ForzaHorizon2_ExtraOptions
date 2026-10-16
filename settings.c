@@ -263,8 +263,9 @@ static int parse_ini(char *text, ModOptions *options) {
             }
             goto invalid;
         }
-        /* FH2Online: [FreeRoam] is read by adapters/azimuth_freeroam.c: Enabled 0 (default) or
-           1, and World, a host:port that overrides the session's world (empty = none). */
+        /* FH2Online: [FreeRoam] is read by adapters/azimuth_freeroam.c: Enabled 1 (default) or
+           0, World, a host:port that overrides the session's world (empty = none), and Direct 0
+           (default) or 1 (no proxy for the joining side). */
         if (text_equal_ignore_case(section, "FreeRoam")) {
             if (text_equal_ignore_case(key, "Enabled") &&
                 (text_equal_ignore_case(value, "0") || text_equal_ignore_case(value, "1"))) {

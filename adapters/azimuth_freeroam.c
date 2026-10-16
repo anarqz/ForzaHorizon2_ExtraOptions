@@ -29,7 +29,7 @@
    another PC is reached through azimuth_proxy.c (F3: STUN, punching, the source
    filter); [FreeRoam] Direct=1 sends the game straight to it instead.
 
-   Everything is off unless [FreeRoam] Enabled=1. */
+   [FreeRoam] Enabled=0 turns all of it off (on by default since fh2online.46). */
 #include "azimuth_host.h"
 #include "logging.h"
 #include "support.h"
@@ -1292,10 +1292,10 @@ void azimuth_apply_freeroam(unsigned char *game_image, const wchar_t *directory,
     if (!path_join(ini, directory, MOD_INI_NAME)) {
         return;
     }
-    GetPrivateProfileStringW(L"FreeRoam", L"Enabled", L"0", value, ARRAY_COUNT(value), ini);
-    fr_enabled = value[0] == L'1';
+    GetPrivateProfileStringW(L"FreeRoam", L"Enabled", L"1", value, ARRAY_COUNT(value), ini);
+    fr_enabled = value[0] != L'0';
     if (!fr_enabled) {
-        log_append("FREEROAM: off (set [FreeRoam] Enabled=1 to try free roam online).\r\n");
+        log_append("FREEROAM: off ([FreeRoam] Enabled=0).\r\n");
         return;
     }
     if (!azimuth_net_proxy_enabled()) {
