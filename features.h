@@ -26,7 +26,7 @@ void treasure_map_prepare_hook(unsigned char *game_image);
 void minimap_prepare_hook(unsigned char *game_image);
 void minimap_set_follow_camera(int enabled);
 void autodrive_set_cinematic(int enabled);
-void photo_sampling_prepare_patch(const ModOptions *options);
+void photo_sampling_prepare_patch(const unsigned char *game_image, const ModOptions *options);
 void photo_sampling_commit_options(void);
 void camera_fov_prepare_hooks(unsigned char *game_image);
 void rims_prepare_hook(unsigned char *game_image);

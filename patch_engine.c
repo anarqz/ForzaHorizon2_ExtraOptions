@@ -177,9 +177,21 @@ static int validate_patch_sites(PatchTransaction *transaction) {
             }
         }
         if (!recognized) {
+            /* FH2Online: the bytes found, so that a host that changed them can be told */
+            static const char digits[] = "0123456789abcdef";
+            char found[3 * 8 + 1];
+            unsigned shown = patch->size < 8 ? patch->size : 8, at = 0;
+            for (unsigned i = 0; i < shown; ++i) {
+                found[at++] = ' ';
+                found[at++] = digits[loaded_bytes[i] >> 4];
+                found[at++] = digits[loaded_bytes[i] & 15];
+            }
+            found[at] = 0;
             status_set("REFUSED: unexpected loaded bytes at ");
             status_append(patch->name);
-            status_append(". No patches applied.");
+            status_append(" (found");
+            status_append(found);
+            status_append("). No patches applied.");
             return 0;
         }
         memory_copy(original_bytes[index], loaded_bytes, patch->size);
@@ -379,7 +391,7 @@ int patch_engine_apply(unsigned char *game_image, const ModOptions *options) {
     gamerpic_prepare_hook(game_image);
     treasure_map_prepare_hook(game_image);
     minimap_prepare_hook(game_image);
-    photo_sampling_prepare_patch(options);
+    photo_sampling_prepare_patch(game_image, options);
     camera_fov_prepare_hooks(game_image);
     rims_prepare_hook(game_image);
     drift_camera_prepare_hook(game_image);

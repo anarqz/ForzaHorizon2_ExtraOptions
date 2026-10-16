@@ -8,11 +8,15 @@
 static const uint32_t native_density = NATIVE_DENSITY;
 static uint32_t selected_density = NATIVE_DENSITY;
 static uint32_t applied_density = NATIVE_DENSITY;
+/* FH2Online: Azimuth 0.9.10 sets this density itself (one of its patched sites of the game,
+   with its liveries at 4K); its value is accepted, and kept when it is denser than ours. */
+static uint32_t host_density = NATIVE_DENSITY;
 static unsigned selected_samples = 129;
 static const unsigned char *const accepted_densities[] = {
     (const unsigned char *)&native_density,
     (const unsigned char *)&selected_density,
     (const unsigned char *)&applied_density,
+    (const unsigned char *)&host_density,
 };
 
 static unsigned grid_sample_count(unsigned density) {
@@ -43,11 +47,25 @@ PatchDefinition photo_sampling_patch = {
     ARRAY_COUNT(accepted_densities),
 };
 
-void photo_sampling_prepare_patch(const ModOptions *options) {
+static void adopt_host_density(const unsigned char *game_image) {
+    uint32_t loaded;
+    host_density = NATIVE_DENSITY;
+    if (!game_image || !memory_read(game_image + SAMPLE_DENSITY_RVA, &loaded, sizeof(loaded)) ||
+        loaded == native_density || loaded == applied_density || loaded < 16 || loaded > 16384) {
+        return;
+    }
+    host_density = loaded;
+    if (host_density > selected_density) {
+        selected_density = host_density;
+    }
+}
+
+void photo_sampling_prepare_patch(const unsigned char *game_image, const ModOptions *options) {
     selected_density = NATIVE_DENSITY;
     selected_samples = 129;
     unsigned target = (unsigned)options->photo_mode_samples;
     if (!target || target == 129) {
+        adopt_host_density(game_image);
         return;
     }
     unsigned center = (unsigned)((float)target * 2.263537f + 0.5f);
@@ -65,6 +83,7 @@ void photo_sampling_prepare_patch(const ModOptions *options) {
             break;
         }
     }
+    adopt_host_density(game_image);
 }
 
 void photo_sampling_commit_options(void) {
