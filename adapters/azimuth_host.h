@@ -41,6 +41,8 @@ DWORD azimuth_net_request(const wchar_t *method, const wchar_t *path, const wcha
                           const wchar_t *content_type, const void *body, size_t body_size, void *out,
                           size_t capacity, size_t *received);
 int azimuth_net_ping(int timeout_ms);
+/* The same, with /info's body in `out` (the pause menu reads latestHook from it). */
+int azimuth_net_ping_reply(int timeout_ms, char *out, size_t cap);
 DWORD azimuth_net_call_quick(const wchar_t *method, const wchar_t *path, const wchar_t *extra_header,
                              const char *body, char *out, size_t capacity, int timeout_ms);
 /* GET https://<host><path> into `out` (azimuth_update.c reads the release from GitHub). */
@@ -87,6 +89,8 @@ int azimuth_account_friend_state(unsigned long long xuid);
 int azimuth_account_friend_change(unsigned long long xuid, int add, wchar_t *message, size_t cap);
 /* REPORT PLAYER (azimuth_online_menu.c): 1 sent, 0 not (`message` says why). */
 int azimuth_account_report(unsigned long long xuid, wchar_t *message, size_t cap);
+/* A notice for the INFINITY screen (English UTF-8; azimuth_cloud.c: the server's save restored). */
+void azimuth_account_set_notice(const char *english);
 /* azimuth_lang.c: Infinity's texts in Portuguese (Brazil) when the game runs in it, else in
    English. azimuth_tr / azimuth_tr8 look a text up by its English. */
 void azimuth_lang_set_portuguese(int on);

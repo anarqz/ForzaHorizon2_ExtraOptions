@@ -344,9 +344,9 @@ static void menu_show_created(void) {
     line_add(L"\nSite key: ");
     line_add(azimuth_account_web_key());
     line_add(L"\n\nUse your profile and this key to sign in to the server's site. The key is kept in "
-             L"Settings > Infinity.\n\nThe game will close and open again on the online profile, which goes on "
-             L"from your offline progress: your cars, credits and level came with you. Your offline save stays as "
-             L"it is.");
+             L"Settings > Infinity.\n\nThe game will close and open again on the online profile. It keeps your "
+             L"offline career (championships, unlocks); XP, credits, records and the garage start the season from "
+             L"your first car, as for every player. Your offline save stays as it is.");
     menu_popup(L"PROFILE CREATED", menu_line, restart, 1);
 }
 
@@ -379,7 +379,8 @@ static void menu_ask_name(void) {
     line_start();
     line_add(L"1 to 20 letters or digits, starting with a letter. It will read Name#");
     line_add(azimuth_account_discriminator());
-    line_add(L" (in the game, up to 15 characters of it). The profile starts from your offline progress.");
+    line_add(L" (in the game, up to 15 characters of it). The profile keeps your offline career and starts the "
+             L"season with your first car.");
     menu_keyboard(L"Online profile name", menu_line, 20, menu_name_typed);
 }
 
@@ -875,6 +876,11 @@ static void menu_click(void *page) {
                                               {L"Test connection", menu_test_connection},
                                               {L"More options", menu_more}};
         line_start();
+        /* the server's word for the player (a season or moderation reset, a restored save) */
+        if (azimuth_account_notice()[0]) {
+            line_add(azimuth_account_notice());
+            line_add(L"\n\n");
+        }
         line_add(L"Online profile: ");
         line_add(azimuth_account_gamertag());
         line_add(L"\nServer: ");

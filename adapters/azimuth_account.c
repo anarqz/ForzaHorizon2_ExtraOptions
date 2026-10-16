@@ -664,25 +664,27 @@ void azimuth_account_test(wchar_t *out, size_t cap) {
 /* The server's /info names the newest hook (latestHook, in release latestRelease): a newer one
    than this is installed by azimuth_update.c. */
 static void account_check_update(const char *reply) {
-    static char latest[48], release[24];
+    /* on the caller's stack: the start's check and the pause menu's may run at once (the offer
+       itself happens once per run: azimuth_update.c's update_started / relay_started) */
+    char latest[48], release[24];
     if (json_string(reply, "latestHook", latest, sizeof(latest))) {
         json_string(reply, "latestRelease", release, sizeof(release));
         azimuth_update_offer(latest, release);
     }
 }
 
-/* Pings the server every 15 s for the pause menu's status line (and the newest version). */
+/* Once, as the game starts: is the server up, and is there a newer ForzaInfinity (which also
+   checks dedicated_server.exe: azimuth_update.c's relay_offer). After that the pause menu asks
+   /info each time it opens (azimuth_account_banner), so nothing polls it in between. */
 static DWORD WINAPI account_link_thread(void *unused) {
     static char reply[1024];
     (void)unused;
-    for (;;) {
-        DWORD status = azimuth_net_call(L"GET", L"/infinity/v1/info", 0, 0, reply, sizeof(reply));
-        InterlockedExchange(&account_link, status == 200 ? 1 : 2);
-        if (status == 200) {
-            account_check_update(reply);
-        }
-        account_sleep(15000);
+    DWORD status = azimuth_net_call(L"GET", L"/infinity/v1/info", 0, 0, reply, sizeof(reply));
+    InterlockedExchange(&account_link, status == 200 ? 1 : 2);
+    if (status == 200) {
+        account_check_update(reply);
     }
+    return 0;
 }
 
 /* The pause menu's status line (ASCII/UTF-8, no XML specials) and its dot color; 0 when the
@@ -693,8 +695,14 @@ int azimuth_account_banner(char *out, size_t cap, const char **color) {
     if (!account_available) {
         return 0;
     }
-    /* checked now, every time the pause menu opens (a short wait, so the menu never hangs) */
-    InterlockedExchange(&account_link, azimuth_net_ping(1000) ? 1 : 2);
+    /* checked now, every time the pause menu opens (a short wait, so the menu never hangs); a
+       newer ForzaInfinity seen here is offered as at the start (once per run) */
+    static char info[1024];
+    int up = azimuth_net_ping_reply(1000, info, sizeof(info));
+    InterlockedExchange(&account_link, up ? 1 : 2);
+    if (up) {
+        account_check_update(info);
+    }
     LONG link = account_link;
     int update = azimuth_update_state();
     if (update == UPDATE_INSTALLED) {
@@ -720,6 +728,14 @@ int azimuth_account_banner(char *out, size_t cap, const char **color) {
         *color = link == 1 ? "#f5c400" : "#9a9a9a";
     }
     return 1;
+}
+
+/* A notice for the INFINITY screen (English UTF-8, translated), unless one is shown already
+   (the server's, which says more). */
+void azimuth_account_set_notice(const char *english) {
+    if (!account_notice[0]) {
+        utf8_to_wide(azimuth_tr8(english), account_notice, ARRAY_COUNT(account_notice));
+    }
 }
 
 const wchar_t *azimuth_account_notice(void) {

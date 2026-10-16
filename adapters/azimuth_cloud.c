@@ -499,6 +499,9 @@ static int synced_is(const char *commit) {
 }
 
 /* The server's save: 1 found (commit filled), 0 none, -1 unreachable or refused. */
+/* GET save/info: 0 no save on the server, 1 its commit in `commit`, 2 the same but the server
+   says to restore it ("restore": a reset, or an upload it refused: its save wins over the local
+   one, whatever the local one is), -1 unreachable. */
 static int server_info(char commit[65]) {
     static char reply[512];
     size_t got = 0;
@@ -529,7 +532,7 @@ static int server_info(char commit[65]) {
         commit[i] = p[i];
     }
     commit[64] = 0;
-    return 1;
+    return text_find(reply, text_length(reply), "\"restore\":true") ? 2 : 1;
 }
 
 static int upload(const CloudRevision *revision) {
@@ -613,19 +616,27 @@ static void back_up(const CloudRevision *revision) {
 
 /* ----------------------------------------------------------------- entry */
 
+/* Set once this session started in step with the server's save: only then are its new
+   revisions uploaded. */
+static volatile LONG cloud_session_synced;
+
 static DWORD WINAPI cloud_watch(void *unused) {
     static CloudRevision revision;
     (void)unused;
     for (;;) {
         cloud_sleep(CLOUD_POLL_MS);
+        if (!cloud_session_synced) {
+            continue;
+        }
         newest_revision(&revision, 0);
         if (!revision.found || synced_is(revision.commit)) {
             continue;
         }
         char server[65];
         int state = server_info(server);
-        /* someone else's newer save is on the server (this PC was logged out elsewhere) */
-        if (state < 0 || (state > 0 && !synced_is(server) && !memory_equal(server, revision.commit, 64))) {
+        /* someone else's newer save is on the server (this PC was logged out elsewhere), or the
+           server wants its own back (the next start restores it) */
+        if (state < 0 || state == 2 || (state > 0 && !synced_is(server) && !memory_equal(server, revision.commit, 64))) {
             continue;
         }
         upload(&revision);
@@ -723,28 +734,37 @@ void azimuth_cloud_start(const wchar_t *bin, const wchar_t *xuid, const wchar_t 
     newest_revision(&local, &highest);
     char server[65];
     int state = server_info(server);
+    /* The server's save is the online profile: it only moves on while the game is connected, so a
+       local save that differs from it at the start was edited or played without the server, and
+       is put aside (saves\fh2online-backup) for the server's. Nothing local is uploaded at the
+       start; a session that could not reach the server uploads nothing at all. */
     if (state < 0) {
-        log_append("CLOUD: server unreachable; the save syncs later.\r\n");
+        log_append("CLOUD: server unreachable; this session's progress will not reach the online profile.\r\n");
     } else if (state == 0) {
         if (local.found) {
-            upload(&local);
+            upload(&local); /* the profile's first save */
         }
-    } else if (local.found && memory_equal(server, local.commit, 64)) {
+        InterlockedExchange(&cloud_session_synced, 1);
+    } else if (local.found && memory_equal(server, local.commit, 64) && state == 1) {
         if (!synced_is(server)) {
             cloud_set_synced(server);
         }
+        InterlockedExchange(&cloud_session_synced, 1);
         log_append("CLOUD: save in sync with the server.\r\n");
-    } else if (local.found && synced_is(server)) {
-        upload(&local); /* played here since the last sync */
     } else {
-        if (local.found && !synced_is(local.commit)) {
-            back_up(&local); /* both changed: the server wins */
+        if (local.found && !memory_equal(server, local.commit, 64)) {
+            back_up(&local);
+            /* the game may have read the local one already: the player is told to restart (what
+               it would upload from it is measured by the server's save gates anyway) */
+            azimuth_account_set_notice("The online profile's save on this PC differed from the server's, so the server's was put in its place. If the game shows other progress, restart it.");
+            log_append("CLOUD: the local save differs from the server's; the server's is the profile's (the local one is kept in saves\\fh2online-backup).\r\n");
         }
         if (download(highest + 1)) {
             cloud_set_synced(server);
+            InterlockedExchange(&cloud_session_synced, 1);
             cloud_log("save downloaded from the server, commit ", server);
         } else {
-            log_append("CLOUD: could not download the server's save; playing the local one.\r\n");
+            log_append("CLOUD: could not download the server's save; this session's progress will not reach the online profile.\r\n");
         }
     }
     HANDLE thread = CreateThread(0, 0, cloud_watch, 0, 0, 0);

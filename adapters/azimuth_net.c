@@ -950,12 +950,23 @@ DWORD azimuth_net_call_quick(const wchar_t *method, const wchar_t *path, const w
     return status;
 }
 
-/* Whether the server answers /infinity/v1/info within timeout_ms (the pause menu's check). */
-int azimuth_net_ping(int timeout_ms) {
-    char reply[256];
+/* GET /infinity/v1/info within timeout_ms (the pause menu's check): 1 when it answered 200,
+   its body in `out` (NUL-terminated, cut to cap - 1). */
+int azimuth_net_ping_reply(int timeout_ms, char *out, size_t cap) {
     size_t got = 0;
-    return net_request(L"GET", L"/infinity/v1/info", 0, L"application/json", 0, 0, reply, sizeof(reply), &got,
-                       timeout_ms) == 200;
+    if (!out || cap < 2) {
+        return 0;
+    }
+    out[0] = 0;
+    DWORD status = net_request(L"GET", L"/infinity/v1/info", 0, L"application/json", 0, 0, out, cap - 1, &got, timeout_ms);
+    out[got < cap ? got : cap - 1] = 0;
+    return status == 200;
+}
+
+/* Whether the server answers /infinity/v1/info within timeout_ms. */
+int azimuth_net_ping(int timeout_ms) {
+    static char reply[1024];
+    return azimuth_net_ping_reply(timeout_ms, reply, sizeof(reply));
 }
 
 /* A GET of https://<host><path> (not the game's server: the self-update reads the release from
