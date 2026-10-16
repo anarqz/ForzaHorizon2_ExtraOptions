@@ -41,6 +41,8 @@ DWORD azimuth_net_request(const wchar_t *method, const wchar_t *path, const wcha
                           const wchar_t *content_type, const void *body, size_t body_size, void *out,
                           size_t capacity, size_t *received);
 int azimuth_net_ping(int timeout_ms);
+/* The same, with /info's body in `out` (the pause menu reads latestHook from it). */
+int azimuth_net_ping_reply(int timeout_ms, char *out, size_t cap);
 DWORD azimuth_net_call_quick(const wchar_t *method, const wchar_t *path, const wchar_t *extra_header,
                              const char *body, char *out, size_t capacity, int timeout_ms);
 /* GET https://<host><path> into `out` (azimuth_update.c reads the release from GitHub). */
