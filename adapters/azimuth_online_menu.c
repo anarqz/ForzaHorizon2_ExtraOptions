@@ -408,9 +408,9 @@ static void menu_show_created(void) {
     line_add(L"\nSite key: ");
     line_add(azimuth_account_web_key());
     line_add(L"\n\nUse your profile and this key to sign in to the server's site. The key is kept in "
-             L"Settings > Infinity.\n\nThe game will close and open again on the online profile. It keeps your "
-             L"offline career (championships, unlocks); XP, credits, records and the garage start the season from "
-             L"your first car, as for every player. Your offline save stays as it is.");
+             L"Settings > Infinity.\n\nThe game will close and open again on the online profile. It starts a new "
+             L"career with your first car, as for every player: every championship, event, road, barn find and "
+             L"treasure is there to win, with its XP and credits. Your offline save stays as it is.");
     menu_popup(L"PROFILE CREATED", menu_line, restart, 1);
 }
 
@@ -444,8 +444,8 @@ static void menu_ask_name(void) {
     line_start();
     line_add(L"1 to 20 letters or digits, starting with a letter. It will read Name#");
     line_add(azimuth_account_discriminator());
-    line_add(L" (in the game, up to 15 characters of it). The profile keeps your offline career and starts the "
-             L"season with your first car.");
+    line_add(L" (in the game, up to 15 characters of it). The profile starts a new career with your first car; "
+             L"your offline save stays as it is.");
     menu_keyboard(L"Online profile name", menu_line, 20, menu_name_typed);
 }
 
