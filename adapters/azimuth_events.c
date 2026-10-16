@@ -23,6 +23,16 @@
 #define EV_SET_OWNER_RVA 0x17b24c0u
 #define EV_SESSION_RVA 0x34d6348u
 #define EV_ANSWER_WAIT_MS 4000u
+/* The race's SetupScoreboardManager behavior (vtable game+0x2d248b8, slot 4 = FUN_1409307c0 ->
+   FUN_140a42d50) sets the scoreboard manager (*(game+0x34d6af0)) up for the race only when it
+   is enabled (+0x10). The online session's game setup turns it off (SetupFreeRoamGame and the
+   network game options paths write 0), so an online race never asked GetBestScore nor sent
+   SubmitScore / its ghost. In an online session it is turned on just before the race's setup:
+   the player's own time and ghost go to the server as in an offline race. */
+#define EV_SCOREBOARD_VTABLE_RVA 0x2d248b8u
+#define EV_SCOREBOARD_SETUP_SLOT 4
+#define EV_SCOREBOARD_SETUP_RVA 0x9307c0u
+#define EV_SCOREBOARD_RVA 0x34d6af0u
 
 typedef void (*EvStateFn)(void *);
 typedef void (*EvSetOwnerFn)(void *, const unsigned long long *);
@@ -32,6 +42,8 @@ static EvStateFn ev_enter_original, ev_decide_original;
 static unsigned long long ev_previous_owner[2];
 static int ev_have_previous, ev_denied_logged;
 static ULONGLONG ev_entered_at;
+static EvStateFn ev_scoreboard_setup_original;
+static int ev_scoreboard_logged;
 
 /* An online session (the game's own test in this state: its session object with +0xd0 set and
    +0xa8 clear). */
@@ -88,8 +100,23 @@ static void ev_decide(void *state) {
     ev_decide_original(state);
 }
 
-static int ev_patch_slot(unsigned slot, unsigned expected_rva, void *hook, EvStateFn *original) {
-    void **at = (void **)(ev_game + EV_STATE_VTABLE_RVA + slot * sizeof(void *));
+static void ev_scoreboard_setup(void *state) {
+    if (ev_online()) {
+        unsigned char *manager = 0, enabled = 1;
+        if (memory_read_pointer(ev_game + EV_SCOREBOARD_RVA, (void **)&manager) && manager &&
+            memory_read(manager + 0x10, &enabled, 1) && !enabled) {
+            manager[0x10] = 1;
+            if (!ev_scoreboard_logged) {
+                ev_scoreboard_logged = 1;
+                log_append("EVENTS: online race: scoreboard on (the player's time and ghost go to the server).\r\n");
+            }
+        }
+    }
+    ev_scoreboard_setup_original(state);
+}
+
+static int ev_patch_vtable(unsigned vtable_rva, unsigned slot, unsigned expected_rva, void *hook, EvStateFn *original) {
+    void **at = (void **)(ev_game + vtable_rva + slot * sizeof(void *));
     void *current = 0;
     DWORD old_protection, ignored;
     if (!memory_read(at, &current, sizeof(current)) || current != ev_game + expected_rva ||
@@ -100,6 +127,10 @@ static int ev_patch_slot(unsigned slot, unsigned expected_rva, void *hook, EvSta
     *at = hook;
     VirtualProtect(at, sizeof(*at), old_protection, &ignored);
     return 1;
+}
+
+static int ev_patch_slot(unsigned slot, unsigned expected_rva, void *hook, EvStateFn *original) {
+    return ev_patch_vtable(EV_STATE_VTABLE_RVA, slot, expected_rva, hook, original);
 }
 
 void azimuth_apply_events(unsigned char *game_image) {
@@ -117,4 +148,8 @@ void azimuth_apply_events(unsigned char *game_image) {
         return;
     }
     log_append("EVENTS: entering an event in free roam online goes back to free roam (no races on the relay yet).\r\n");
+    if (!ev_patch_vtable(EV_SCOREBOARD_VTABLE_RVA, EV_SCOREBOARD_SETUP_SLOT, EV_SCOREBOARD_SETUP_RVA,
+                         (void *)(uintptr_t)ev_scoreboard_setup, &ev_scoreboard_setup_original)) {
+        log_append("EVENTS: the scoreboard setup is not where expected; online race times stay off the boards.\r\n");
+    }
 }
