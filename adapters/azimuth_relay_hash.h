@@ -2,5 +2,5 @@
    dedicated_server.exe released with this hook (azimuth_update.c). */
 #ifndef AZIMUTH_RELAY_HASH_H
 #define AZIMUTH_RELAY_HASH_H
-#define AZIMUTH_RELAY_SHA256 "b0ec59c3924e734f670e2643ec16f4597928a3e67fc64e593142d2c9d22a4a4c"
+#define AZIMUTH_RELAY_SHA256 "c1316c7069e480789a6962a81a4a892926914631a9f70c40b782b858c1cbb965"
 #endif
