@@ -299,6 +299,25 @@ int azimuth_carstate_any(void) {
     return cs_remote_count != 0;
 }
 
+/* A position is used only just after the relay sent one: to match a car not yet matched, or to
+   check the one matched. Otherwise the car's own position is not read at all. */
+int azimuth_carstate_needs_position(void *car) {
+    unsigned long long now = GetTickCount64();
+    int needed = 0;
+    AcquireSRWLockExclusive(&cs_lock);
+    int matched = 0;
+    for (int i = 0; i < CS_REMOTES && !matched; ++i) {
+        matched = cs_remotes[i].used && cs_remotes[i].car == car;
+    }
+    for (int i = 0; i < CS_REMOTES && !needed; ++i) {
+        const CsRemote *r = &cs_remotes[i];
+        needed = r->used && r->has_position && now - r->position_at < CS_FRESH_MS &&
+                 (matched ? r->car == car : !r->car);
+    }
+    ReleaseSRWLockExclusive(&cs_lock);
+    return needed;
+}
+
 static float cs_distance2(const float *a, const float *b) {
     float d = 0;
     for (int i = 0; i < 3; ++i) {

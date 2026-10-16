@@ -81,6 +81,8 @@ int azimuth_proxy_send_world(const void *data, int size);
 void azimuth_carstate_local(int lights, int roof);
 void azimuth_carstate_received(const unsigned char *data, int size);
 int azimuth_carstate_any(void);
+/* Whether azimuth_carstate_wanted needs `car`'s position now (else it is passed NULL). */
+int azimuth_carstate_needs_position(void *car);
 /* What car `car` (at `position`, NULL if unknown) should show, when it is a player's: 1 and the
    state, else 0. */
 int azimuth_carstate_wanted(void *car, const float position[3], int *lights, int *roof);

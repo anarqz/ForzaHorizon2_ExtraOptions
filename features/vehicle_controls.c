@@ -612,24 +612,27 @@ static int remote_slot(void *car, int make) {
 }
 
 /* A player's car: its headlights as forced on its owner's screen (written around the game's
-   update, as maintain_controls does for the local car, then its lights update FUN_140f5c900 is
-   run so that they show at once), and its roof moved by the same animation events. */
+   update, as maintain_controls does for the local car; when they change, its lights update
+   FUN_140f5c900 is run so that they show at once, the car's own update keeping them after), and
+   its roof moved by the same animation events. */
 static void show_remote_state(void *car, int lights, int open, int after, float dt) {
     int i = remote_slot(car, 1);
     if (lights) {
         ((HeadlightSetter)(game_image + 0xf74ef0))(car, lights == 1);
         ((HeadlightSetter)(game_image + 0xf74ee0))(car, 1);
-        void *presentation, *list;
-        if (after && memory_read_pointer((unsigned char *)car + 0x4d38, &presentation) && presentation &&
-            memory_read_pointer((unsigned char *)car + 0x51c0, &list) && list) {
-            ((CarLightsUpdate)(game_image + 0xf5c900))(car, dt);
-        }
     } else if (remote_cars[i].lights) {
         ((HeadlightSetter)(game_image + 0xf74ee0))(car, 0); /* back to the game's own */
     }
-    remote_cars[i].lights = lights;
     if (!after) {
         return;
+    }
+    if (lights != remote_cars[i].lights) {
+        void *presentation, *list;
+        if (memory_read_pointer((unsigned char *)car + 0x4d38, &presentation) && presentation &&
+            memory_read_pointer((unsigned char *)car + 0x51c0, &list) && list) {
+            ((CarLightsUpdate)(game_image + 0xf5c900))(car, dt);
+        }
+        remote_cars[i].lights = lights;
     }
     void *animation = car_animation(car);
     if (animation != remote_cars[i].animation) {
@@ -655,7 +658,7 @@ static int remote_state(void *car, int *lights, int *open) {
         return 0;
     }
     float position[3];
-    int known = car_position(car, position);
+    int known = azimuth_carstate_needs_position(car) && car_position(car, position);
     if (!azimuth_carstate_wanted(car, known ? position : NULL, lights, open)) {
         int i = remote_slot(car, 0);
         if (i >= 0) {
