@@ -1348,6 +1348,17 @@ void azimuth_account_restart(void) {
     ExitProcess(0);
 }
 
+unsigned long long azimuth_account_xuid_value(void) {
+    unsigned long long xuid = 0;
+    if (!account_ready || !account_active) {
+        return 0;
+    }
+    for (const wchar_t *p = account_xuid; *p >= L'0' && *p <= L'9'; ++p) {
+        xuid = xuid * 10 + (unsigned)(*p - L'0');
+    }
+    return xuid;
+}
+
 const wchar_t *azimuth_account_token(void) {
     return account_ready && account_active && account_token[0] ? account_token : 0;
 }

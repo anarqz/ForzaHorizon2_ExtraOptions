@@ -495,7 +495,12 @@ static DWORD WINAPI px_thread(void *argument) {
         PxAddr mapped;
         int has_mapped = 0;
         if (px_stun_parse(packet, n, &kind, &txid, &mapped, &has_mapped)) {
-            if (kind == 0x0101) {
+            if (kind == 0x3E91) {
+                /* the relay passing another player's headlights and roof (azimuth_carstate.c) */
+                if (px_have_world && px_same(&from, &px_world)) {
+                    azimuth_carstate_received(packet, n);
+                }
+            } else if (kind == 0x0101) {
                 for (unsigned i = 0; i < px_stun_count; ++i) {
                     if (memory_equal(txid, px_txid[i], 12) && px_same(&from, &px_stun[i]) && has_mapped) {
                         px_mapped[i] = mapped;
@@ -540,6 +545,15 @@ static DWORD WINAPI px_thread(void *argument) {
     px.closesocket(px_socket);
     px_socket = PX_INVALID;
     return 0;
+}
+
+int azimuth_proxy_send_world(const void *data, int size) {
+    UINT_PTR s = px_socket;
+    if (s == PX_INVALID || !px_have_world || px_direct) {
+        return 0;
+    }
+    PxAddr world = px_world;
+    return px.sendto(s, (const char *)data, size, 0, &world, (int)sizeof(world)) == size;
 }
 
 /* --------------------------------------------------------------------- setup */

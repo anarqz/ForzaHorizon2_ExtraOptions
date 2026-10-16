@@ -65,12 +65,25 @@ int azimuth_cloud_upload_offline(const wchar_t *bin, const wchar_t *token, const
 /* azimuth_account.c: the player's FH2Online account on that server. */
 void azimuth_apply_account(const wchar_t *directory);
 const wchar_t *azimuth_account_token(void);
+/* The XUID this session plays as online (0 offline). */
+unsigned long long azimuth_account_xuid_value(void);
 /* azimuth_proxy.c (F3): the joining player's UDP proxy between the game and a world on another
    PC (STUN, the punch exchange, the source filter). start returns 1 with `local` (a 28-byte
    sockaddr_in6) when the game should send there instead of `world`. */
 void azimuth_proxy_configure(int direct);
 int azimuth_proxy_start(const void *world, void *local);
 void azimuth_proxy_stop(void);
+/* Sends to the world from the proxy's socket (the address the relay knows this player by); 0
+   while there is no world (or no proxy). */
+int azimuth_proxy_send_world(const void *data, int size);
+/* azimuth_carstate.c: the ExtraOptions headlights (0 the game's, 1 forced on, 2 forced off) and
+   roof (0 closed, 1 open) of the players' cars, through the world's relay. */
+void azimuth_carstate_local(int lights, int roof);
+void azimuth_carstate_received(const unsigned char *data, int size);
+int azimuth_carstate_any(void);
+/* What car `car` (at `position`, NULL if unknown) should show, when it is a player's: 1 and the
+   state, else 0. */
+int azimuth_carstate_wanted(void *car, const float position[3], int *lights, int *roof);
 /* TEST CONNECTION's free roam part (about 1.5 s: STUN from a socket of its own). */
 void azimuth_proxy_nat_test(wchar_t *out, size_t cap);
 /* azimuth_world.c: dedicated_server.net while this PC hosts a world (1), else 0. */
@@ -140,6 +153,8 @@ void azimuth_freeroam_cut(void);
 /* azimuth_world.c: the world this player hosts (HOSPEDAR MUNDO). */
 void azimuth_world_set_directory(const wchar_t *directory);
 int azimuth_world_hosting(void);
+/* The relay's UDP port while this PC hosts (server.cfg Port), else 0. */
+unsigned azimuth_world_port(void);
 unsigned azimuth_world_players(void);
 const wchar_t *azimuth_world_config_path(void);
 int azimuth_world_start(const wchar_t **why);

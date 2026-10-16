@@ -66,6 +66,10 @@ void azimuth_world_set_directory(const wchar_t *directory) {
     world_directory[n] = 0;
 }
 
+unsigned azimuth_world_port(void) {
+    return azimuth_world_hosting() ? world_config.port : 0;
+}
+
 int azimuth_world_hosting(void) {
     return world_on != 0;
 }

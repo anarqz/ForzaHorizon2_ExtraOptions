@@ -3,6 +3,9 @@
 #include "features.h"
 #include "roof_fade.h"
 #include "support.h"
+#ifdef FH2_AZIMUTH
+#include "adapters/azimuth_host.h"
+#endif
 
 #define RIGHT_STICK_BUTTON 0x80
 #define ROOF_HOLD_MILLISECONDS 2000u
@@ -541,6 +544,132 @@ static void maintain_controls(void *car) {
     }
 }
 
+#ifdef FH2_AZIMUTH
+/* FH2Online free roam: the headlights and roof set here go to the other players, and theirs are
+   shown on their cars here (adapters/azimuth_carstate.c finds which car is whose). */
+typedef void (*CarLightsUpdate)(void *, float);
+
+/* The car's position: its target's slot 0 (FUN_140f62290 -> the body's +0x270), checked as
+   car_is_stationary checks the velocity getter. */
+static int car_position(void *car, float out[3]) {
+    unsigned char *target = (unsigned char *)car + 0x20;
+    void *body, *vtable, *target_vtable;
+    uintptr_t getter;
+    if (!memory_read_pointer(target, &target_vtable) || target_vtable != game_image + 0x2c5ce28 ||
+        !memory_read((unsigned char *)target_vtable, &getter, sizeof(getter)) ||
+        getter != (uintptr_t)game_image + 0xf62290 || !memory_read_pointer(target + 0x4be8, &body) ||
+        !memory_read_pointer(body, &vtable) ||
+        !memory_read((unsigned char *)vtable + 0x270, &getter, sizeof(getter)) ||
+        getter < (uintptr_t)game_image + 0x1000 || getter >= (uintptr_t)game_image + 0x1dcc000) {
+        return 0;
+    }
+    _Alignas(16) float position[4] = {0};
+    ((VelocityGetter)(game_image + 0xf62290))(target, position);
+    for (unsigned i = 0; i < 3; ++i) {
+        if (!float_is_finite(position[i])) {
+            return 0;
+        }
+        out[i] = position[i];
+    }
+    return 1;
+}
+
+static void report_local_state(void *car) {
+    void *animation = car_animation(car);
+    int lights = headlights.active && headlights.car == car && headlights.animation == animation
+                     ? (headlights.enabled ? 1 : 2)
+                     : 0;
+    int open = roof.active && roof.car == car && roof.animation == animation && roof.open;
+    azimuth_carstate_local(lights, open);
+}
+
+#define REMOTE_CARS 16
+static struct {
+    void *car, *animation;
+    int lights, roof;
+} remote_cars[REMOTE_CARS];
+
+/* What it last showed on `car` (a slot for it when `make`). */
+static int remote_slot(void *car, int make) {
+    int free_slot = -1;
+    for (int i = 0; i < REMOTE_CARS; ++i) {
+        if (remote_cars[i].car == car) {
+            return i;
+        }
+        if (!remote_cars[i].car && free_slot < 0) {
+            free_slot = i;
+        }
+    }
+    if (!make) {
+        return -1;
+    }
+    int i = free_slot >= 0 ? free_slot : (int)((uintptr_t)car >> 4) % REMOTE_CARS;
+    remote_cars[i].car = car;
+    remote_cars[i].animation = NULL;
+    remote_cars[i].lights = 0;
+    remote_cars[i].roof = 0;
+    return i;
+}
+
+/* A player's car: its headlights as forced on its owner's screen (written around the game's
+   update, as maintain_controls does for the local car, then its lights update FUN_140f5c900 is
+   run so that they show at once), and its roof moved by the same animation events. */
+static void show_remote_state(void *car, int lights, int open, int after, float dt) {
+    int i = remote_slot(car, 1);
+    if (lights) {
+        ((HeadlightSetter)(game_image + 0xf74ef0))(car, lights == 1);
+        ((HeadlightSetter)(game_image + 0xf74ee0))(car, 1);
+        void *presentation, *list;
+        if (after && memory_read_pointer((unsigned char *)car + 0x4d38, &presentation) && presentation &&
+            memory_read_pointer((unsigned char *)car + 0x51c0, &list) && list) {
+            ((CarLightsUpdate)(game_image + 0xf5c900))(car, dt);
+        }
+    } else if (remote_cars[i].lights) {
+        ((HeadlightSetter)(game_image + 0xf74ee0))(car, 0); /* back to the game's own */
+    }
+    remote_cars[i].lights = lights;
+    if (!after) {
+        return;
+    }
+    void *animation = car_animation(car);
+    if (animation != remote_cars[i].animation) {
+        remote_cars[i].animation = animation;
+        remote_cars[i].roof = 0; /* a car (re)loaded comes closed */
+    }
+    if (open != remote_cars[i].roof) {
+        const char *event = open ? "roof:open" : "roof:close";
+        if (animation && has_animation_event(animation, event)) {
+            ((AnimationDetail)(game_image + 0x16fbe90))(animation, 0);
+            ((AnimationEvent)(game_image + 0xf5d300))(car, event);
+        }
+        remote_cars[i].roof = open;
+    }
+    int detail;
+    if (open && animation && memory_read((unsigned char *)animation + 0x10, &detail, 4) && detail != 0) {
+        ((AnimationDetail)(game_image + 0x16fbe90))(animation, 0);
+    }
+}
+
+static int remote_state(void *car, int *lights, int *open) {
+    if (!azimuth_carstate_any()) {
+        return 0;
+    }
+    float position[3];
+    int known = car_position(car, position);
+    if (!azimuth_carstate_wanted(car, known ? position : NULL, lights, open)) {
+        int i = remote_slot(car, 0);
+        if (i >= 0) {
+            if (remote_cars[i].lights) {
+                ((HeadlightSetter)(game_image + 0xf74ee0))(car, 0);
+            }
+            remote_cars[i].car = NULL;
+        }
+        return 0;
+    }
+    return 1;
+}
+#endif
+
 static void vehicle_update(void *self, float dt, float frame_dt, unsigned frame) {
     void *local_car = autodrive_game_get_car();
     int owned = local_car == self;
@@ -549,10 +678,25 @@ static void vehicle_update(void *self, float dt, float frame_dt, unsigned frame)
         vehicle_controls_tick(local_car, autodrive_game_window_focused());
         maintain_controls(self);
     }
+#ifdef FH2_AZIMUTH
+    int remote_lights = 0, remote_open = 0;
+    int remote = !owned && self && remote_state(self, &remote_lights, &remote_open);
+    if (remote) {
+        show_remote_state(self, remote_lights, remote_open, 0, dt);
+    }
+#endif
     ((CarUpdate)(game_image + 0x2a9400))(self, dt, frame_dt, frame);
     if (owned) {
         maintain_controls(self);
     }
+#ifdef FH2_AZIMUTH
+    if (remote) {
+        show_remote_state(self, remote_lights, remote_open, 1, dt);
+    }
+    if (owned) {
+        report_local_state(self);
+    }
+#endif
     autodrive_game_release_car(local_car);
 }
 
