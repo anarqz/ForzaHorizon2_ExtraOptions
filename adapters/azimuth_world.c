@@ -116,7 +116,12 @@ static const char world_default_cfg[] =
     "; Perfis que podem entrar, separados por vírgula (vazio = todos).\r\n"
     "Allow=\r\n"
     "; Perfis que não podem entrar, separados por vírgula.\r\n"
-    "Ban=\r\n";
+    "Ban=\r\n"
+    "\r\n"
+    "[Events]\r\n"
+    "; Corridas do mundo: 1 = o mundo conduz as corridas dos eventos; 0 = quem entra num evento\r\n"
+    "; volta ao free roam.\r\n"
+    "Races=1\r\n";
 
 static int world_write_default_cfg(const wchar_t *path) {
     HANDLE file = CreateFileW(path, GENERIC_WRITE, 0, 0, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, 0);

@@ -37,6 +37,11 @@ const wchar_t *azimuth_account_token(void) {
 const wchar_t *azimuth_tr(const wchar_t *english) {
     return english;
 }
+/* the relay's car states (azimuth_carstate.c): not under test here */
+void azimuth_carstate_received(const unsigned char *data, int size) {
+    (void)data;
+    (void)size;
+}
 int azimuth_world_net_text(char *out, size_t cap) {
     snprintf(out, cap, "nat cone\npublic 203.0.113.5:5101\nupnp none\n");
     return 1;
