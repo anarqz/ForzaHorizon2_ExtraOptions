@@ -1,4 +1,4 @@
-/* FH2Online free roam: the world this player hosts (PLANO_FREEROAM.md, F1).
+/* FH2Online free roam: the world this player hosts.
 
    HOSPEDAR MUNDO (INFINITY screen) starts dedicated_server.exe, the world's relay, from this
    folder (data\bin) with its server.cfg. The hook writes a server.cfg with the defaults the

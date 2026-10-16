@@ -1,4 +1,4 @@
-/* FH2Online free roam over the Internet (PLANO_FREEROAM.md, F3): the joining player's side.
+/* FH2Online free roam over the Internet: the joining player's side.
 
    The game talks NerdCore from its socket ([::]:5100) to the address the association gives it.
    For a world on another PC that address becomes this proxy's, [::1]:<port>, and the proxy's own

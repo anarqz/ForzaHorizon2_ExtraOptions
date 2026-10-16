@@ -1,4 +1,4 @@
-/* FH2Online free roam online (PLANO_FREEROAM.md, phase F0).
+/* FH2Online free roam online.
 
    FH2's live game ran on a dedicated server: each console joins an Xbox Live
    session (MPSD), is handed the server's SecureDeviceAddress, opens a
