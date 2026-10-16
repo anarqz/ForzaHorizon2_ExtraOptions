@@ -505,13 +505,36 @@ static char ui_strings_buffer[UI_STRINGS_MAX];
 static UiText ui_strings = {ui_strings_buffer, 0, UI_STRINGS_MAX};
 static volatile LONG ui_logged_strings;
 
-static int ui_is_message_center(long long size) {
+/* Each language's MessageCenter.str as its zip stores it: compressed size (the same order as
+   ui_message_center_sizes; LOC.zip's 16519/3680 is not a language the game runs in). */
+static const unsigned ui_message_center_packed[] = {4662u, 4866u, 4792u, 5339u, 5343u, 5345u, 5436u, 5492u,
+                                                    5303u, 5520u, 5702u, 5509u, 5849u, 5615u, 5500u, 5706u};
+
+/* Whether a zip entry is a Message Center table: its size and its compressed size (the entry's
+   +0x18 and +0x1c, which the stream gets, FUN_1411df7b0) both one language's. Files of other
+   zips share the sizes alone (car models, animations, shaders), and opening one of those a
+   second time to look (as before) could break the game's own read of it: the car loads on the
+   START menu crashed with a closed handle. */
+static int ui_entry_is(const unsigned field[2], long long size, unsigned full, unsigned packed) {
+    return size == (long long)full &&
+           ((field[0] == full && field[1] == packed) || (field[0] == packed && field[1] == full));
+}
+
+static int ui_is_message_center(long long size, const unsigned field[2]) {
     for (unsigned i = 0; i < ARRAY_COUNT(ui_message_center_sizes); ++i) {
-        if (size == (long long)ui_message_center_sizes[i]) {
+        if (ui_entry_is(field, size, ui_message_center_sizes[i], ui_message_center_packed[i])) {
             return 1;
         }
     }
     return 0;
+}
+
+/* The pages edited here as their zips store them (size, compressed size): stateflow.zip's
+   ui_screens.xml and pause.xml, UI.zip's A_PauseOptions.xaml and A_PauseMenu.xaml. Only
+   entries with both are looked at: a game stream of another file is never read here. */
+static int ui_is_page(long long size, const unsigned field[2]) {
+    return ui_entry_is(field, size, UI_SCREENS_SIZE, 9874u) || ui_entry_is(field, size, UI_PAUSE_FLOW_SIZE, 6759u) ||
+           ui_entry_is(field, size, UI_OPTIONS_SIZE, 2605u) || ui_entry_is(field, size, UI_PAUSE_SIZE, 8434u);
 }
 
 static unsigned ui_u16(const unsigned char *p) {
@@ -828,9 +851,13 @@ static void **ui_zip_open(void *archive, void **out, void *entry, unsigned mode)
         return result;
     }
     long long size = ((UiRemainingFn)ui_slot(stream, 0x50))(stream);
-    if (ui_is_message_center(size)) {
+    unsigned field[2] = {0, 0};
+    if (!entry || !memory_read((const unsigned char *)entry + 0x18, field, sizeof(field))) {
+        field[0] = field[1] = 0;
+    }
+    if (ui_is_message_center(size, field)) {
         ui_message_center(archive, out, entry, mode, stream, size);
-    } else {
+    } else if (ui_is_page(size, field)) {
         ui_replace(out, stream);
     }
     InterlockedExchange(&ui_busy, 0);

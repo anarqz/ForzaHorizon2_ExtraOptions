@@ -447,6 +447,10 @@ static void px_pick(const PxAddr *a, const char *how, DWORD started) {
 
 static DWORD WINAPI px_thread(void *argument) {
     LONG generation = (LONG)(intptr_t)argument;
+    /* this thread's own socket: a restart (azimuth_proxy_stop, then a new one) may set
+       px_socket to the next one before this thread is done, and closing that one too would
+       close it twice (on Wine a socket's number can be a file of the game's by then) */
+    UINT_PTR own = px_socket;
     static unsigned char packet[PX_PACKET], from_raw[64];
     PxAddr game, from;
     memory_copy(&game, &px_candidates[0], sizeof(game));
@@ -485,7 +489,7 @@ static DWORD WINAPI px_thread(void *argument) {
             px_binding_request(px_txid[PX_STUN_SERVERS], &px_world);
         }
         int from_size = (int)sizeof(from_raw);
-        int n = px.recvfrom(px_socket, (char *)packet, sizeof(packet), 0, from_raw, &from_size);
+        int n = px.recvfrom(own, (char *)packet, sizeof(packet), 0, from_raw, &from_size);
         if (n <= 0) {
             continue;
         }
@@ -542,8 +546,8 @@ static DWORD WINAPI px_thread(void *argument) {
             px_send(packet, n, &game);
         }
     }
-    px.closesocket(px_socket);
-    px_socket = PX_INVALID;
+    InterlockedCompareExchangePointer((void *volatile *)&px_socket, (void *)PX_INVALID, (void *)own);
+    px.closesocket(own);
     return 0;
 }
 
