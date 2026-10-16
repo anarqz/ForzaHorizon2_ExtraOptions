@@ -876,6 +876,11 @@ static void menu_click(void *page) {
                                               {L"Test connection", menu_test_connection},
                                               {L"More options", menu_more}};
         line_start();
+        /* the server's word for the player (a season or moderation reset, a restored save) */
+        if (azimuth_account_notice()[0]) {
+            line_add(azimuth_account_notice());
+            line_add(L"\n\n");
+        }
         line_add(L"Online profile: ");
         line_add(azimuth_account_gamertag());
         line_add(L"\nServer: ");
