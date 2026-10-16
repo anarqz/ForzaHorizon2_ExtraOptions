@@ -669,3 +669,161 @@ void azimuth_proxy_stop(void) {
         }
     }
 }
+
+/* ------------------------------------------------------- TEST CONNECTION */
+
+static void px_report(wchar_t *out, size_t cap, const wchar_t *text) {
+    size_t n = 0;
+    while (out[n] && n + 1 < cap) ++n;
+    text = azimuth_tr(text);
+    while (text && *text && n + 1 < cap) out[n++] = *text++;
+    out[n] = 0;
+}
+
+static void px_report_raw(wchar_t *out, size_t cap, const char *text) {
+    size_t n = 0;
+    while (out[n] && n + 1 < cap) ++n;
+    while (text && *text && n + 1 < cap) out[n++] = (wchar_t)(unsigned char)*text++;
+    out[n] = 0;
+}
+
+/* The line of dedicated_server.net that starts with `key ` ("" when there is none). */
+static int px_net_line(const char *text, const char *key, char *out, size_t cap) {
+    size_t k = text_length(key);
+    for (const char *line = text; *line;) {
+        const char *end = line;
+        while (*end && *end != '\n' && *end != '\r') ++end;
+        if ((size_t)(end - line) > k && memory_equal(line, key, k) && line[k] == ' ') {
+            size_t n = (size_t)(end - line) - k - 1;
+            n = n < cap - 1 ? n : cap - 1;
+            memory_copy(out, line + k + 1, n);
+            out[n] = 0;
+            return 1;
+        }
+        line = *end ? end + 1 : end;
+    }
+    out[0] = 0;
+    return 0;
+}
+
+/* Settings > Infinity > TEST CONNECTION, free roam part: STUN from a socket of its own (this
+   network's public address, IPv6, the NAT's kind) and, while hosting, what the relay found
+   (dedicated_server.net). Takes about 1.5 s. */
+void azimuth_proxy_nat_test(wchar_t *out, size_t cap) {
+    px_report(out, cap, L"\n\nFREE ROAM (worlds over the Internet)");
+    if (!px_load()) {
+        return;
+    }
+    px_resolve_stun();
+    UINT_PTR s = px.socket(PX_AF_INET6, PX_SOCK_DGRAM, PX_IPPROTO_UDP);
+    PxAddr seen[PX_STUN_SERVERS];
+    int got[PX_STUN_SERVERS] = {0};
+    static unsigned char tx[PX_STUN_SERVERS][12], packet[PX_PACKET], from_raw[64];
+    if (s != PX_INVALID) {
+        DWORD off = 0, timeout = 100;
+        px.setsockopt(s, PX_IPPROTO_IPV6, PX_IPV6_V6ONLY, (const char *)&off, sizeof(off));
+        px.setsockopt(s, PX_SOL_SOCKET, PX_SO_RCVTIMEO, (const char *)&timeout, sizeof(timeout));
+        PxAddr any;
+        for (size_t i = 0; i < sizeof(any); ++i) ((unsigned char *)&any)[i] = 0;
+        any.family = PX_AF_INET6;
+        if (px.bind(s, &any, (int)sizeof(any)) == 0) {
+            for (unsigned i = 0; i < px_stun_count; ++i) {
+                unsigned char m[20] = {0, 1, 0, 0, 0x21, 0x12, 0xa4, 0x42};
+                px_new_txid(tx[i]);
+                memory_copy(m + 8, tx[i], 12);
+                px.sendto(s, (const char *)m, 20, 0, &px_stun[i], (int)sizeof(px_stun[i]));
+            }
+            DWORD started = (DWORD)GetTickCount64();
+            unsigned answered = 0;
+            while (answered < px_stun_count && (DWORD)GetTickCount64() - started < PX_STUN_WAIT_MS) {
+                int from_size = (int)sizeof(from_raw);
+                int n = px.recvfrom(s, (char *)packet, sizeof(packet), 0, from_raw, &from_size);
+                if (n <= 0) continue;
+                PxAddr from, mapped;
+                px_from(from_raw, &from);
+                unsigned kind = 0;
+                const unsigned char *txid = 0;
+                int has = 0;
+                if (!px_stun_parse(packet, n, &kind, &txid, &mapped, &has) || kind != 0x0101 || !has) continue;
+                for (unsigned i = 0; i < px_stun_count; ++i) {
+                    if (!got[i] && memory_equal(txid, tx[i], 12) && px_same(&from, &px_stun[i])) {
+                        got[i] = 1;
+                        seen[i] = mapped;
+                        ++answered;
+                    }
+                }
+            }
+        }
+        px.closesocket(s);
+    }
+    /* IPv4 answers decide the NAT; any IPv6 answer means IPv6 works */
+    int v4 = 0, v6 = 0, same = 1;
+    PxAddr first4;
+    for (unsigned i = 0; i < px_stun_count; ++i) {
+        int server_v4 = px_stun[i].address[10] == 0xff && px_stun[i].address[11] == 0xff;
+        if (!got[i]) continue;
+        if (server_v4) {
+            if (!v4) first4 = seen[i];
+            else same &= px_same(&first4, &seen[i]);
+            ++v4;
+        } else {
+            ++v6;
+        }
+    }
+    if (!v4 && !v6) {
+        px_report(out, cap, L"\nNo answer from the STUN servers: this network seems to block UDP. Playing with players outside "
+                            L"your network will not work until it allows it (a firewall, or a school or work network).");
+    } else {
+        if (v4) {
+            char text[72];
+            px_format(&first4, text, sizeof(text));
+            /* the port is this test's own: only the address means something to the player */
+            for (size_t i = 0; text[i]; ++i) {
+                if (text[i] == ':') {
+                    text[i] = 0;
+                    break;
+                }
+            }
+            px_report(out, cap, L"\nYour address on the Internet: ");
+            px_report_raw(out, cap, text);
+        }
+        px_report(out, cap, v6 ? L"\nIPv6: yes." : L"\nIPv6: no.");
+        if (v4 >= 2 && same) {
+            px_report(out, cap, L"\nNAT: moderate (cone). You can join most players' worlds and most can join yours, with no "
+                                L"port to open.");
+        } else if (v4 >= 2) {
+            px_report(out, cap, L"\nNAT: strict (symmetric). You can join worlds whose host has a moderate or open NAT, but two "
+                                L"strict NATs cannot meet. Fixes: turn UPnP on in the router, ask your operator for a public IP "
+                                L"(CGNAT), or forward UDP 5101 to this PC when hosting.");
+        } else {
+            px_report(out, cap, L"\nNAT: not measured (only one STUN server answered).");
+        }
+    }
+    /* the world this PC hosts */
+    static char net[1024], value[160];
+    if (azimuth_world_net_text(net, sizeof(net))) {
+        px_report(out, cap, L"\n\nYOUR WORLD");
+        if (px_net_line(net, "public", value, sizeof(value))) {
+            px_report(out, cap, L"\nPlayers reach it at ");
+            px_report_raw(out, cap, value);
+            px_report(out, cap, L".");
+        }
+        px_net_line(net, "upnp", value, sizeof(value));
+        if (!value[0] || memory_equal(value, "pending", 7)) {
+            px_report(out, cap, L"\nUPnP: still asking the router.");
+        } else if (memory_equal(value, "none", 4) || memory_equal(value, "off", 3)) {
+            px_report(out, cap, L"\nUPnP: not available on this router (players still get in by hole punching).");
+        } else if (memory_equal(value, "failed", 6)) {
+            px_report(out, cap, L"\nUPnP: the router refused (");
+            px_report_raw(out, cap, value + (text_length(value) > 7 ? 7 : text_length(value)));
+            px_report(out, cap, L"); players still get in by hole punching.");
+        } else {
+            px_report(out, cap, L"\nUPnP: the router forwarded the world's port.");
+        }
+        if (px_net_line(net, "othernat", value, sizeof(value))) {
+            px_report(out, cap, L"\nYour router is behind another router or the operator's CGNAT: players outside may not get "
+                                L"in. Put the operator's modem in bridge mode, or ask for a public IP.");
+        }
+    }
+    px_report(out, cap, L"\nGuide: github.com/anarqz/ForzaInfinity/blob/main/docs/FREEROAM.md");
+}

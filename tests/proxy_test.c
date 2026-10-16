@@ -34,6 +34,13 @@ int memory_equal(const void *left, const void *right, size_t size) {
 const wchar_t *azimuth_account_token(void) {
     return L"test-token";
 }
+const wchar_t *azimuth_tr(const wchar_t *english) {
+    return english;
+}
+int azimuth_world_net_text(char *out, size_t cap) {
+    snprintf(out, cap, "nat cone\npublic 203.0.113.5:5101\nupnp none\n");
+    return 1;
+}
 
 static char lan[64];
 static unsigned short echo_port;
@@ -183,6 +190,14 @@ int main(int argc, char **argv) {
 
     azimuth_proxy_stop();
     CHECK(px_socket == PX_INVALID);
+
+    /* TEST CONNECTION's free roam part, on this PC's real network */
+    static wchar_t report[2400];
+    azimuth_proxy_nat_test(report, 2400);
+    fprintf(stderr, "%ls\n", report);
+    CHECK(wcsstr(report, L"FREE ROAM") && wcsstr(report, L"YOUR WORLD") && wcsstr(report, L"203.0.113.5:5101"));
+    CHECK(wcsstr(report, L"NAT: ") || wcsstr(report, L"No answer from the STUN servers"));
+    CHECK(wcsstr(report, L"not available on this router"));
     stop = 1;
     WaitForSingleObject(t, 2000);
     printf(fails ? "proxy_test: %d failure(s)\n" : "proxy_test: ok\n", fails);

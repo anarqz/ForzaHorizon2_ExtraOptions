@@ -62,6 +62,10 @@ const wchar_t *azimuth_account_token(void);
 void azimuth_proxy_configure(int direct);
 int azimuth_proxy_start(const void *world, void *local);
 void azimuth_proxy_stop(void);
+/* TEST CONNECTION's free roam part (about 1.5 s: STUN from a socket of its own). */
+void azimuth_proxy_nat_test(wchar_t *out, size_t cap);
+/* azimuth_world.c: dedicated_server.net while this PC hosts a world (1), else 0. */
+int azimuth_world_net_text(char *out, size_t cap);
 /* -1 unavailable, 0 no account, 1 account kept but offline profile, 2 playing online */
 int azimuth_account_state(void);
 const wchar_t *azimuth_account_gamertag(void);

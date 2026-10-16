@@ -690,8 +690,9 @@ static void menu_find_world(void) {
 }
 
 static void menu_test_connection(void) {
-    static wchar_t report[600];
+    static wchar_t report[2400];
     azimuth_account_test(report, ARRAY_COUNT(report));
+    azimuth_proxy_nat_test(report, ARRAY_COUNT(report));
     menu_info(L"TEST CONNECTION", report);
 }
 

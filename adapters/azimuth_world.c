@@ -460,8 +460,27 @@ static void world_pass_punches(const char *reply) {
         ++passed;
     }
     if (passed) {
-        log_append("WORLD: a player is joining over the Internet; punch passed to the relay.\r\n");
+        log_append("WORLD: a player is joining; punch passed to the relay.\r\n");
     }
+}
+
+/* dedicated_server.net while a world is on (TEST CONNECTION shows it). */
+int azimuth_world_net_text(char *out, size_t cap) {
+    static wchar_t path[PATH_CAPACITY];
+    out[0] = 0;
+    if (!world_on || cap < 2 || !path_join(path, world_directory, WORLD_NET_NAME)) {
+        return 0;
+    }
+    HANDLE file = CreateFileW(path, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, 0,
+                              OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, 0);
+    if (file == INVALID_HANDLE_VALUE) {
+        return 0;
+    }
+    DWORD size = 0;
+    int ok = ReadFile(file, out, (DWORD)(cap - 1), &size, 0);
+    CloseHandle(file);
+    out[ok ? size : 0] = 0;
+    return ok && size;
 }
 
 /* dedicated_server.net (the relay's STUN and UPnP results) as the announcement's
