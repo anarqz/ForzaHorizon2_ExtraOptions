@@ -14,8 +14,13 @@
    - the local save is the one last synced (SaveCommit in FH2Online_Accounts.ini) and the
      server's is another: the profile was played elsewhere, the server's revision is written
      here as a new, higher revision;
-   - the server still has the last synced save and the local one is newer: it is uploaded;
-   - both changed: the server wins; the local revision is moved to saves\fh2online-backup.
+   - the server still has the last synced save and the local one is newer (the last session's
+     revisions after the watcher's last look, or written as the game closed): it is uploaded,
+     and the server's save gates measure it; refused, the server's save comes back as below;
+   - both changed, or the server says to restore its save: the server wins; the local revision
+     is moved to saves\fh2online-backup.
+   A session that starts without the server forgets SaveCommit, so what it saves never reaches
+   the server: the next start puts it aside for the server's save.
    While playing, a thread uploads each new revision (checked every minute).
    A downloaded bundle is installed only if every file matches the commit's SHA-256 and size,
    and only the fixed file names below are ever written. */
@@ -489,6 +494,14 @@ static void cloud_set_synced(const char *commit) {
     }
 }
 
+/* Nothing agreed with the server any more (a session played without it). */
+static void cloud_forget_synced(void) {
+    cloud_synced[0] = 0;
+    if (cloud_write_profile) {
+        cloud_write_profile(cloud_section, L"SaveCommit", L"", cloud_ini);
+    }
+}
+
 static int synced_is(const char *commit) {
     for (int i = 0; i < 64; ++i) {
         if (cloud_synced[i] != (wchar_t)commit[i]) {
@@ -734,11 +747,14 @@ void azimuth_cloud_start(const wchar_t *bin, const wchar_t *xuid, const wchar_t 
     newest_revision(&local, &highest);
     char server[65];
     int state = server_info(server);
-    /* The server's save is the online profile: it only moves on while the game is connected, so a
-       local save that differs from it at the start was edited or played without the server, and
-       is put aside (saves\fh2online-backup) for the server's. Nothing local is uploaded at the
-       start; a session that could not reach the server uploads nothing at all. */
+    /* The server's save is the online profile: it only moves on while the game is connected. A
+       local save newer than the last one synced, with the server still on that one, is the last
+       session's own progress and is uploaded (the server's save gates measure it); any other
+       local save that differs from the server's was edited or played without the server, and is
+       put aside (saves\fh2online-backup) for the server's. A session that could not reach the
+       server uploads nothing at all, not even at the next start. */
     if (state < 0) {
+        cloud_forget_synced();
         log_append("CLOUD: server unreachable; this session's progress will not reach the online profile.\r\n");
     } else if (state == 0) {
         if (local.found) {
@@ -751,6 +767,9 @@ void azimuth_cloud_start(const wchar_t *bin, const wchar_t *xuid, const wchar_t 
         }
         InterlockedExchange(&cloud_session_synced, 1);
         log_append("CLOUD: save in sync with the server.\r\n");
+    } else if (local.found && state == 1 && synced_is(server) && upload(&local)) {
+        InterlockedExchange(&cloud_session_synced, 1);
+        log_append("CLOUD: the last session's newer save was uploaded.\r\n");
     } else {
         if (local.found && !memory_equal(server, local.commit, 64)) {
             back_up(&local);
