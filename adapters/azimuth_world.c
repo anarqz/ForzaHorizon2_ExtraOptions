@@ -17,7 +17,13 @@
    (POST /infinity/v1/worlds: the world's name, visibility, password, player limit, port,
    whether it is listed and this PC's LAN address); the server sends players to it
    (freeroam.rs). Leaving the online session (HORIZON SOLO: the association's DestroyAsync),
-   "Close world", or the relay ending, stops it (DELETE /infinity/v1/worlds). */
+   "Close world", or the relay ending, stops it (DELETE /infinity/v1/worlds).
+
+   F3 (connections over the Internet): the relay writes what STUN and the router's UPnP found to
+   dedicated_server.net (dedicated/src/nat.rs); the announcement carries those public addresses
+   and the NAT's kind. Every 3 s the thread asks the server for punches (GET worlds/punches, and
+   the heartbeat's reply carries them too): the addresses of players about to join, which go to
+   the relay as "punch <ip:port>" lines so that this PC's NAT lets them in. */
 #include "azimuth_host.h"
 #include "logging.h"
 #include "sha256.h"
@@ -26,12 +32,15 @@
 #define WORLD_CFG_NAME L"server.cfg"
 #define WORLD_EXE_NAME L"dedicated_server.exe"
 #define WORLD_LOG_NAME L"dedicated_server.log"
+#define WORLD_NET_NAME L"dedicated_server.net"
 #define WORLD_HEARTBEAT_MS 15000u
+#define WORLD_PUNCH_POLL_MS 3000u
 #define WORLD_CFG_MAX 16384u
 
 static wchar_t world_directory[PATH_CAPACITY];
 static HANDLE world_job, world_process;
-/* The write end of the relay's stdin: "kick <xuid>" lines (the server's kick list). */
+/* The write end of the relay's stdin: "kick <xuid>" lines (the server's kick list) and
+   "punch <ip:port>" lines (players about to join). */
 static HANDLE world_relay_input;
 /* world_generation: each world's heartbeat thread stops once it changes. */
 static volatile LONG world_on, world_generation, world_listed;
@@ -402,9 +411,114 @@ static void world_pass_kicks(const char *reply) {
     }
 }
 
+/* An address as the relay and the server write it: digits, hex letters, dots, colons and
+   brackets only, 4 to 63 characters. */
+static int world_address_text(const char *a, size_t n) {
+    if (n < 4 || n > 63) {
+        return 0;
+    }
+    for (size_t i = 0; i < n; ++i) {
+        char c = a[i];
+        int ok = (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F') || c == '.' || c == ':' ||
+                 c == '[' || c == ']';
+        if (!ok) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+/* The server's "punch":["<ip:port>",...] go to the relay as "punch <ip:port>" lines. */
+static void world_pass_punches(const char *reply) {
+    const char *at = text_find(reply, text_length(reply), "\"punch\":[");
+    if (!at || !world_relay_input) {
+        return;
+    }
+    unsigned passed = 0;
+    for (at += 9; *at && *at != ']';) {
+        if (*at != '"') {
+            ++at;
+            continue;
+        }
+        const char *start = ++at;
+        while (*at && *at != '"') {
+            ++at;
+        }
+        size_t n = (size_t)(at - start);
+        if (*at == '"') {
+            ++at;
+        }
+        if (!world_address_text(start, n)) {
+            continue;
+        }
+        char line[80];
+        memory_copy(line, "punch ", 6);
+        memory_copy(line + 6, start, n);
+        line[6 + n] = '\n';
+        DWORD written = 0;
+        WriteFile(world_relay_input, line, (DWORD)(7 + n), &written, 0);
+        ++passed;
+    }
+    if (passed) {
+        log_append("WORLD: a player is joining over the Internet; punch passed to the relay.\r\n");
+    }
+}
+
+/* dedicated_server.net (the relay's STUN and UPnP results) as the announcement's
+   ,"public":[...],"nat":"..." (nothing before the relay wrote it). */
+static void world_add_net(WorldText *t) {
+    static wchar_t path[PATH_CAPACITY];
+    static char text[1024];
+    if (!path_join(path, world_directory, WORLD_NET_NAME)) {
+        return;
+    }
+    HANDLE file = CreateFileW(path, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, 0,
+                              OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, 0);
+    if (file == INVALID_HANDLE_VALUE) {
+        return;
+    }
+    DWORD size = 0;
+    int ok = ReadFile(file, text, sizeof(text) - 1, &size, 0);
+    CloseHandle(file);
+    if (!ok) {
+        return;
+    }
+    text[size] = 0;
+    const char *nat = "unknown";
+    unsigned count = 0;
+    world_add(t, ",\"public\":[");
+    for (char *line = text; *line;) {
+        char *end = line;
+        while (*end && *end != '\n' && *end != '\r') {
+            ++end;
+        }
+        size_t n = (size_t)(end - line);
+        if (n == 8 && memory_equal(line, "nat cone", 8)) {
+            nat = "cone";
+        } else if (n == 13 && memory_equal(line, "nat symmetric", 13)) {
+            nat = "symmetric";
+        } else if (count < 3 && ((n > 7 && memory_equal(line, "public ", 7)) || (n > 5 && memory_equal(line, "upnp ", 5)))) {
+            const char *a = line + (line[0] == 'p' ? 7 : 5);
+            size_t k = n - (size_t)(a - line);
+            if (world_address_text(a, k)) {
+                char one[64];
+                memory_copy(one, a, k);
+                one[k] = 0;
+                if (count++) {
+                    world_add(t, ",");
+                }
+                world_add_json(t, one);
+            }
+        }
+        line = *end ? end + 1 : end;
+    }
+    world_add(t, "],\"nat\":");
+    world_add_json(t, nat);
+}
+
 /* POST /infinity/v1/worlds (start and heartbeat). Returns the HTTP status. */
 static DWORD world_announce(void) {
-    static char body[1024], reply[1024];
+    static char body[1536], reply[4096];
     WorldText t = {body, 0, sizeof(body)};
     body[0] = 0;
     AcquireSRWLockExclusive(&world_lock);
@@ -426,11 +540,13 @@ static DWORD world_announce(void) {
     }
     world_add(&t, world_listed ? "],\"listed\":true,\"version\":" : "],\"listed\":false,\"version\":");
     world_add_json(&t, MOD_VERSION);
+    world_add_net(&t);
     world_add(&t, "}");
     ReleaseSRWLockExclusive(&world_lock);
     DWORD status = azimuth_net_call(L"POST", L"/infinity/v1/worlds", world_token_header(), body, reply, sizeof(reply));
     if (status == 200) {
         world_pass_kicks(reply);
+        world_pass_punches(reply);
         /* "players": n */
         const char *p = text_find(reply, text_length(reply), "\"players\":");
         if (p) {
@@ -474,11 +590,23 @@ static void world_end(const char *why) {
     log_append(").\r\n");
 }
 
+/* GET /infinity/v1/worlds/punches: players about to join (F3). */
+static void world_poll_punches(void) {
+    static char reply[4096];
+    if (azimuth_net_call(L"GET", L"/infinity/v1/worlds/punches", world_token_header(), 0, reply, sizeof(reply)) == 200) {
+        world_pass_punches(reply);
+    }
+}
+
 static DWORD WINAPI world_heartbeat(void *argument) {
     LONG generation = (LONG)(intptr_t)argument;
     for (;;) {
         for (unsigned waited = 0; waited < WORLD_HEARTBEAT_MS && world_generation == generation; waited += 500) {
             Sleep(500);
+            if ((waited + 500) % WORLD_PUNCH_POLL_MS == 0 && waited + 500 < WORLD_HEARTBEAT_MS && world_on &&
+                world_generation == generation) {
+                world_poll_punches();
+            }
         }
         if (!world_on || world_generation != generation) {
             break;

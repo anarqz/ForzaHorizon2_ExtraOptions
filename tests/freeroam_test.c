@@ -44,6 +44,17 @@ void azimuth_world_left(void) {
 void azimuth_world_hash_car_db(const wchar_t *executable) {
     (void)executable;
 }
+/* azimuth_proxy.c has its own test (tests/proxy_test.c): here the game goes to the world. */
+void azimuth_proxy_configure(int direct) {
+    (void)direct;
+}
+int azimuth_proxy_start(const void *world, void *local) {
+    (void)world;
+    (void)local;
+    return 0;
+}
+void azimuth_proxy_stop(void) {
+}
 
 /* Azimuth's HSTRING layout, as fr_hstring reads it. */
 typedef struct {

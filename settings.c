@@ -273,6 +273,10 @@ static int parse_ini(char *text, ModOptions *options) {
             if (text_equal_ignore_case(key, "World")) {
                 continue;
             }
+            if (text_equal_ignore_case(key, "Direct") &&
+                (text_equal_ignore_case(value, "0") || text_equal_ignore_case(value, "1"))) {
+                continue;
+            }
             goto invalid;
         }
 

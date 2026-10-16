@@ -25,7 +25,9 @@
 
    The world's address travels in the session as the server's
    secureDeviceAddress: base64 of "fh2inf:<host>:<port>" (an IPv6 host in
-   brackets). [FreeRoam] World=<host>:<port> overrides it for tests.
+   brackets). [FreeRoam] World=<host>:<port> overrides it for tests. A world on
+   another PC is reached through azimuth_proxy.c (F3: STUN, punching, the source
+   filter); [FreeRoam] Direct=1 sends the game straight to it instead.
 
    Everything is off unless [FreeRoam] Enabled=1. */
 #include "azimuth_host.h"
@@ -795,6 +797,7 @@ static ULONG STDMETHODCALLTYPE fr_assoc_release(FrAssociation *self) {
 static HRESULT STDMETHODCALLTYPE fr_assoc_destroy(FrAssociation *self, void **out) {
     (void)self;
     fr_log("association DestroyAsync -> completed.");
+    azimuth_proxy_stop();
     azimuth_world_left();
     return fr_completed(0, out);
 }
@@ -853,6 +856,7 @@ static HRESULT STDMETHODCALLTYPE fr_template_create(FrWrap *self, FrCom *remote,
     association->lpVtbl = fr_assoc_vtable;
     association->references = 1;
     association->remote = fr_world_address(base64);
+    azimuth_proxy_start(&association->remote, &association->remote);
     fr_log("SecureDeviceAssociationTemplate.CreateAssociationAsync -> completed.");
     return fr_completed((FrCom *)(void *)association, out);
 }
@@ -1304,6 +1308,8 @@ void azimuth_apply_freeroam(unsigned char *game_image, const wchar_t *directory,
     azimuth_world_hash_car_db(executable);
     GetPrivateProfileStringW(L"FreeRoam", L"World", L"", fr_world_override,
                              ARRAY_COUNT(fr_world_override), ini);
+    GetPrivateProfileStringW(L"FreeRoam", L"Direct", L"0", value, ARRAY_COUNT(value), ini);
+    azimuth_proxy_configure(value[0] == L'1');
     fr_base64_encode("fh2inf:local", fr_local_base64, ARRAY_COUNT(fr_local_base64));
     fr_build_vtables();
     fr_apply_patches();

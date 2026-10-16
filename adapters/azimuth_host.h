@@ -56,6 +56,12 @@ int azimuth_cloud_upload_offline(const wchar_t *bin, const wchar_t *token, const
 /* azimuth_account.c: the player's FH2Online account on that server. */
 void azimuth_apply_account(const wchar_t *directory);
 const wchar_t *azimuth_account_token(void);
+/* azimuth_proxy.c (F3): the joining player's UDP proxy between the game and a world on another
+   PC (STUN, the punch exchange, the source filter). start returns 1 with `local` (a 28-byte
+   sockaddr_in6) when the game should send there instead of `world`. */
+void azimuth_proxy_configure(int direct);
+int azimuth_proxy_start(const void *world, void *local);
+void azimuth_proxy_stop(void);
 /* -1 unavailable, 0 no account, 1 account kept but offline profile, 2 playing online */
 int azimuth_account_state(void);
 const wchar_t *azimuth_account_gamertag(void);
