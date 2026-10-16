@@ -63,6 +63,9 @@ int azimuth_cloud_upload_offline(const wchar_t *bin, const wchar_t *token, const
 }
 void azimuth_expansions_granted(void) {
 }
+int azimuth_cloud_stopped(void) {
+    return 0;
+}
 int azimuth_update_state(void) {
     return 0;
 }

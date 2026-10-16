@@ -121,8 +121,14 @@ static int pg_headers_have(const wchar_t *headers, const wchar_t *text) {
 
 int azimuth_progress_hold(const wchar_t *headers, const void *body, size_t size) {
     unsigned now[4];
-    if (!pg_headers_have(headers, L"X-Method: UpdateAll") || !pg_headers_have(headers, L"OnlineProfile") ||
-        !azimuth_progress_read(body, size, now)) {
+    if (!pg_headers_have(headers, L"X-Method: UpdateAll") || !pg_headers_have(headers, L"OnlineProfile")) {
+        return 0;
+    }
+    /* sync stopped (azimuth_cloud_stop): no profile sync either until the game restarts */
+    if (azimuth_cloud_stopped()) {
+        return 1;
+    }
+    if (!azimuth_progress_read(body, size, now)) {
         return 0;
     }
     AcquireSRWLockExclusive(&pg_lock);
@@ -142,8 +148,8 @@ int azimuth_progress_hold(const wchar_t *headers, const void *body, size_t size)
         log_append("PROGRESS: a profile sync was held back (");
         log_append(what[over]);
         log_append(" grew beyond what play earns since the last one sent).\r\n");
-        azimuth_account_set_notice("A profile sync was not sent: its progress grew beyond what play can earn in that "
-                                   "time. Your progress keeps syncing as you play.");
+        /* the save holds that progress too: nothing more goes online until a restart */
+        azimuth_cloud_stop("a profile sync grew beyond what play earns");
     }
     return over != 0;
 }

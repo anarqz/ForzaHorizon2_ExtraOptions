@@ -1165,7 +1165,10 @@ int azimuth_account_banner(char *out, size_t cap, const char **color) {
     }
     LONG link = account_link;
     int update = azimuth_update_state();
-    if (update == UPDATE_INSTALLED) {
+    if (azimuth_cloud_stopped()) {
+        text_add(out, cap, azimuth_tr8("INFINITY  |  CLOUD SYNC STOPPED: PROGRESS REJECTED  |  RESTART THE GAME"));
+        *color = "#ff4f4f";
+    } else if (update == UPDATE_INSTALLED) {
         text_add(out, cap, azimuth_tr8("INFINITY  |  UPDATE INSTALLED  |  RESTART THE GAME"));
         *color = "#f5c400";
     } else if (update == UPDATE_AVAILABLE && link != 2) {
@@ -1196,6 +1199,11 @@ void azimuth_account_set_notice(const char *english) {
     if (!account_notice[0]) {
         utf8_to_wide(azimuth_tr8(english), account_notice, ARRAY_COUNT(account_notice));
     }
+}
+
+/* A notice that replaces whatever was shown (the sync stopping matters more). */
+void azimuth_account_force_notice(const char *english) {
+    utf8_to_wide(azimuth_tr8(english), account_notice, ARRAY_COUNT(account_notice));
 }
 
 const wchar_t *azimuth_account_notice(void) {

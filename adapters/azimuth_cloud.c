@@ -504,6 +504,41 @@ static void cloud_forget_synced(void) {
     }
 }
 
+/* RestoreSave=1: this PC's save gives way to the server's at the next start (progress that was
+   not accepted stays in saves\fh2online-backup). */
+static int cloud_restore_marked(void) {
+    wchar_t value[4] = {0};
+    GetPrivateProfileStringW(cloud_section, L"RestoreSave", L"", value, ARRAY_COUNT(value), cloud_ini);
+    return value[0] == L'1';
+}
+
+static void cloud_mark_restore(int on) {
+    if (cloud_write_profile && cloud_section[0]) {
+        cloud_write_profile(cloud_section, L"RestoreSave", on ? L"1" : 0, cloud_ini);
+    }
+}
+
+/* Set when progress of this session was not accepted (by the server, or held back by the hook):
+   nothing more is saved online until the game restarts, and the INFINITY status line says so.
+   The game is never closed for it: the player restarts when they choose, and that start puts
+   the cloud save in place. */
+static volatile LONG cloud_stopped;
+
+int azimuth_cloud_stopped(void) {
+    return cloud_stopped != 0;
+}
+
+void azimuth_cloud_stop(const char *why) {
+    if (InterlockedExchange(&cloud_stopped, 1)) {
+        return;
+    }
+    cloud_mark_restore(1);
+    log_append("CLOUD: sync stopped (");
+    log_append(why);
+    log_append("): nothing more is saved online; the next start loads the cloud save.\r\n");
+    azimuth_account_force_notice("Cloud sync stopped: the server did not accept some of this session's progress. Nothing from now on is saved online. Restart the game to play on from your cloud save.");
+}
+
 static int synced_is(const char *commit) {
     for (int i = 0; i < 64; ++i) {
         if (cloud_synced[i] != (wchar_t)commit[i]) {
@@ -580,6 +615,9 @@ static int upload(const CloudRevision *revision) {
     if (status != 200) {
         reply[got] = 0;
         cloud_log("upload refused: ", reply);
+        if (status == 409) {
+            azimuth_cloud_stop("the server refused the save");
+        }
         return 0;
     }
     cloud_set_synced(revision->commit);
@@ -640,15 +678,20 @@ static DWORD WINAPI cloud_watch(void *unused) {
     (void)unused;
     for (;;) {
         cloud_sleep(CLOUD_POLL_MS);
-        if (!cloud_session_synced) {
+        if (!cloud_session_synced || cloud_stopped) {
+            continue;
+        }
+        char server[65];
+        int state = server_info(server);
+        if (state == 2) {
+            /* the server refused progress of this session (or reset the profile) */
+            azimuth_cloud_stop("the server wants its save back");
             continue;
         }
         newest_revision(&revision, 0);
         if (!revision.found || synced_is(revision.commit)) {
             continue;
         }
-        char server[65];
-        int state = server_info(server);
         /* someone else's newer save is on the server (this PC was logged out elsewhere), or the
            server wants its own back (the next start restores it) */
         if (state < 0 || state == 2 || (state > 0 && !synced_is(server) && !memory_equal(server, revision.commit, 64))) {
@@ -749,6 +792,14 @@ void azimuth_cloud_start(const wchar_t *bin, const wchar_t *xuid, const wchar_t 
     newest_revision(&local, &highest);
     char server[65];
     int state = server_info(server);
+    /* the last session's progress was not accepted: the cloud save, whatever this one is */
+    int forced = cloud_restore_marked();
+    if (forced && state == 1) {
+        state = 2;
+    }
+    if (forced && state != 2) {
+        cloud_mark_restore(0);
+    }
     /* The server's save is the online profile: it only moves on while the game is connected. A
        local save newer than the last one synced, with the server still on that one, is the last
        session's own progress and is uploaded (the server's save gates measure it); any other
@@ -784,6 +835,9 @@ void azimuth_cloud_start(const wchar_t *bin, const wchar_t *xuid, const wchar_t 
             cloud_set_synced(server);
             InterlockedExchange(&cloud_session_synced, 1);
             cloud_log("save downloaded from the server, commit ", server);
+            if (forced) {
+                cloud_mark_restore(0);
+            }
         } else {
             log_append("CLOUD: could not download the server's save; this session's progress will not reach the online profile.\r\n");
         }

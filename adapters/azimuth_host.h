@@ -115,6 +115,12 @@ void azimuth_account_set_online(int online);
 void azimuth_account_restart(void);
 int azimuth_account_log_in(const wchar_t *gamertag, const wchar_t *web_key, wchar_t *message, size_t cap);
 const wchar_t *azimuth_account_notice(void);
+void azimuth_account_force_notice(const char *english);
+/* azimuth_cloud.c: progress of this session was not accepted (`why`): nothing more is saved
+   online (cloud save, profile syncs), the status line says to restart, and the next start loads
+   the cloud save. The game is never closed for it. */
+void azimuth_cloud_stop(const char *why);
+int azimuth_cloud_stopped(void);
 /* SWITCH PROFILE: the Infinity profiles of this PC on this server (at most
    ACCOUNT_PROFILES_MAX, the one in use first), from FH2Online_Accounts.ini and, with
    `ask_server`, the server's list of the ones this PC created. */

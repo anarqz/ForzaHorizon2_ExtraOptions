@@ -514,8 +514,10 @@ static const LangText8 lang_texts8[] = {
      "Este PC tem perfis do Infinity neste servidor em que não está conectado. Abra TROCAR PERFIL para jogar com um de novo: no PC que o criou, não precisa da chave do site."},
     {"This world does not run events: its host turned races off or has not updated ForzaInfinity yet. Play them in HORIZON SOLO or in another world.",
      "Este mundo não conduz eventos: o host desligou as corridas ou ainda não atualizou o ForzaInfinity. Jogue-os no HORIZON SOLO ou em outro mundo."},
-    {"A profile sync was not sent: its progress grew beyond what play can earn in that time. Your progress keeps syncing as you play.",
-     "Uma sincronização do perfil não foi enviada: o progresso cresceu além do que se ganha jogando nesse tempo. Seu progresso continua sincronizando enquanto você joga."},
+    {"Cloud sync stopped: the server did not accept some of this session's progress. Nothing from now on is saved online. Restart the game to play on from your cloud save.",
+     "Sincronização com a nuvem interrompida: o servidor não aceitou parte do progresso desta sessão. Nada a partir de agora é salvo online. Reinicie o jogo para continuar a partir do seu save da nuvem."},
+    {"INFINITY  |  CLOUD SYNC STOPPED: PROGRESS REJECTED  |  RESTART THE GAME",
+     "INFINITY  |  SINCRONIZAÇÃO INTERROMPIDA: PROGRESSO REJEITADO  |  REINICIE O JOGO"},
 };
 
 void azimuth_lang_set_portuguese(int on) {
