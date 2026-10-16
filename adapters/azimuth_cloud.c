@@ -102,11 +102,13 @@ static int wjoin(wchar_t *out, const wchar_t *a, const wchar_t *b, const wchar_t
 
 /* cloud_saves = the folder Azimuth keeps the saves in, from `bin` (data\bin). 0.9.9 moved them
    from data\saves into a folder per game under data\titles, named after FH2's title id
-   (1A96545B): the first of those names that exists, else data\saves. */
+   (1A96545B), and 0.9.10 keeps them there: the first of those names that exists, else
+   data\saves. */
 static int saves_folder(const wchar_t *bin) {
     static wchar_t joined[CLOUD_PATH];
     static const wchar_t *const per_game[] = {L"\\..\\titles\\1A96545B\\saves", L"\\..\\titles\\title-1a96545b\\saves"};
-    if (azimuth_host_build((const unsigned char *)GetModuleHandleW(0)) == AZIMUTH_099) {
+    AzimuthBuild build = azimuth_host_build((const unsigned char *)GetModuleHandleW(0));
+    if (build == AZIMUTH_099 || build == AZIMUTH_0910) {
         for (size_t i = 0; i < sizeof(per_game) / sizeof(per_game[0]); ++i) {
             DWORD attributes;
             if (wjoin(joined, bin, per_game[i], 0) && GetFullPathNameW(joined, CLOUD_PATH, cloud_saves, 0) &&

@@ -70,8 +70,8 @@ static const HostPatchSet mask_patch_set_099 = {0x13dc40,
    CPU-tiled title texture" (+0x128 of the texture set): in its copy check (0.9.9
    FUN_1401a5760) and in its other GPU-write check (FUN_1401a4740). Those two jne go too, so
    the copy happens on the GPU side. What the GPU writes may not reach the game's CPU copy, so a
-   remote livery can look wrong, but the game goes on. Only 0.9.9 has the write patches, and
-   the texture patch is applied only after them. */
+   remote livery can look wrong, but the game goes on. Only 0.9.9 and 0.9.10 (the same bytes,
+   moved) have the write patches, and the texture patch is applied only after them. */
 static const unsigned char placement_nops[] = {0x90, 0x90, 0x90, 0x90, 0x90, 0x90};
 static const HostCodePatch placement_patches[] = {{0x05, sizeof(placement_nops), placement_nops},
                                                   {0x0f, sizeof(placement_nops), placement_nops}};
@@ -106,12 +106,26 @@ static const HostPatchSet tiled_patch_sets_099[] = {
     {0x1a57ed, 0x0a, tiled_copy_original_hash, tiled_copy_patched_hash, tiled_patches,
      ARRAY_COUNT(tiled_patches)}};
 
+/* 0.9.10: FUN_14012f990, FUN_1401b8210, FUN_1401b9230 */
+static const HostPatchSet placement_patch_set_0910 = {
+    0x12fb86, 0x15, placement_original_hash, placement_patched_hash,
+    placement_patches, ARRAY_COUNT(placement_patches)};
+static const HostPatchSet tiled_patch_sets_0910[] = {
+    {0x1b822e, 0x0a, tiled_write_original_hash, tiled_write_patched_hash, tiled_patches,
+     ARRAY_COUNT(tiled_patches)},
+    {0x1b92bd, 0x0a, tiled_copy_original_hash, tiled_copy_patched_hash, tiled_patches,
+     ARRAY_COUNT(tiled_patches)}};
+
 static int apply_placement(unsigned char *base) {
-    if (azimuth_host_build(base) != AZIMUTH_099) {
+    AzimuthBuild build = azimuth_host_build(base);
+    if (build != AZIMUTH_099 && build != AZIMUTH_0910) {
         return 0;
     }
-    int writes = azimuth_patch_host_codes(base, tiled_patch_sets_099, ARRAY_COUNT(tiled_patch_sets_099));
-    return writes > 0 ? azimuth_patch_host_code(base, &placement_patch_set_099) : writes;
+    const HostPatchSet *tiled = build == AZIMUTH_099 ? tiled_patch_sets_099 : tiled_patch_sets_0910;
+    int writes = azimuth_patch_host_codes(base, tiled, ARRAY_COUNT(tiled_patch_sets_099));
+    return writes > 0 ? azimuth_patch_host_code(base, build == AZIMUTH_099 ? &placement_patch_set_099
+                                                                           : &placement_patch_set_0910)
+                      : writes;
 }
 
 static int apply_livery(unsigned char *base) {
@@ -129,7 +143,11 @@ static int apply_livery(unsigned char *base) {
 
 void azimuth_apply_livery_compatibility(void) {
     int result = apply_livery((unsigned char *)GetModuleHandleW(NULL));
-    if (result > 0) {
+    /* 0.9.10 rewrote the mask helper (FUN_14014bde0): it makes the 2x, 4x and 8x FMASK views,
+       quality levels included, so there is nothing to patch. */
+    if (azimuth_host_build((const unsigned char *)GetModuleHandleW(NULL)) == AZIMUTH_0910) {
+        log_append("AZIMUTH: 2x MSAA liveries are handled by Azimuth 0.9.10 itself.\r\n");
+    } else if (result > 0) {
         log_append("AZIMUTH: 2x MSAA livery fragment-mask compatibility applied; "
                    "texture resolution and sample count preserved.\r\n");
     } else if (result < 0) {
@@ -144,8 +162,8 @@ void azimuth_apply_livery_compatibility(void) {
                               "textures are made as shader resources.\r\n"
                : result < 0 ? "AZIMUTH: placement texture patch could not change memory "
                               "protection; host code left unchanged.\r\n"
-                            : "AZIMUTH: placement texture patch skipped; not a 0.9.9 "
-                              "build with the inspected bytes.\r\n");
+                            : "AZIMUTH: placement texture patch skipped; not a 0.9.9 or "
+                              "0.9.10 build with the inspected bytes.\r\n");
 }
 
 #ifdef FH2_TWEAKS_TEST

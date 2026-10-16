@@ -2,8 +2,9 @@
 #define FH2_AZIMUTH_OFFSETS_H
 
 /* Where FH2Online's adapters hook azimuth.exe, per Azimuth build. 0.9.9's were found from
-   0.9.7's by matching functions instruction by instruction (address operands blanked); each
-   function compared equal, and the hashed bytes are checked again before anything is written. */
+   0.9.7's, and 0.9.10's from 0.9.9's, by matching functions instruction by instruction (address
+   operands blanked); each function compared equal, and the hashed bytes are checked again before
+   anything is written. */
 typedef struct {
     const char *name;
     /* azimuth_net.c: CoCreateInstance (CLSID_FreeThreadedXMLHTTP60 -> OfflineRequest) */

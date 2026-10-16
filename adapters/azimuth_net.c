@@ -3822,7 +3822,7 @@ void azimuth_apply_network(const wchar_t *directory) {
         log_append("NETWORK: HTTP hook could not be written; network layer disabled.\r\n");
     } else {
         net_mode = NET_MODE_OFF;
-        log_append("NETWORK: skipped; FH2Online supports Azimuth 0.9.7 and 0.9.9, not this build "
+        log_append("NETWORK: skipped; FH2Online supports Azimuth 0.9.7, 0.9.9 and 0.9.10, not this build "
                    "(the game plays offline).\r\n");
     }
 }
