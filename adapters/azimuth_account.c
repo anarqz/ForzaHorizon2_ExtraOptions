@@ -253,6 +253,349 @@ static void account_save(void) {
     }
 }
 
+/* ------------------------------------------------- profiles on this PC */
+/* A PC keeps up to ACCOUNT_PROFILES_MAX profiles per server (the server lets a PC create as
+   many). The one in use is the [host:port] section, as always (older hooks and the cloud save
+   read it); the others wait in [host:port|<xuid>] sections with the same keys, so switching
+   moves whole sections and each profile keeps its own SaveCommit. A profile signed in on
+   another PC loses its token here but stays listed (with its name and last site key), and the
+   PC that created it can play it again without the key (POST device/recover).
+   The same server reached at another address (127.0.0.1, its LAN address, a name) keeps the
+   profiles: a PC with none for the address asks the server which of its other sections'
+   tokens it knows, by their SHA-1 (POST accounts/known; the tokens themselves never go to
+   another server), and those are copied in. */
+#define ACCOUNT_PROFILE_KEYS 6
+#define ACCOUNT_SECTIONS_CAP 8192u
+static const wchar_t *const account_record_keys[ACCOUNT_PROFILE_KEYS] = {L"Token",  L"Xuid",       L"Gamertag",
+                                                                         L"WebKey", L"SaveCommit", L"StormIsland"};
+typedef struct {
+    wchar_t values[ACCOUNT_PROFILE_KEYS][72];
+} AccountRecord;
+static wchar_t account_sections[ACCOUNT_SECTIONS_CAP];
+
+static int account_write_in(const wchar_t *section, const wchar_t *key, const wchar_t *value) {
+    HMODULE kernel = GetModuleHandleW(L"kernel32.dll");
+    WritePrivateProfileStringWFn write =
+        kernel ? (WritePrivateProfileStringWFn)(uintptr_t)GetProcAddress(kernel, "WritePrivateProfileStringW") : 0;
+    return write && write(section, key, value, account_file);
+}
+
+static void record_read(const wchar_t *section, AccountRecord *record) {
+    for (unsigned i = 0; i < ACCOUNT_PROFILE_KEYS; ++i) {
+        GetPrivateProfileStringW(section, account_record_keys[i], L"", record->values[i], 72, account_file);
+    }
+}
+
+static void record_write(const wchar_t *section, const AccountRecord *record) {
+    for (unsigned i = 0; i < ACCOUNT_PROFILE_KEYS; ++i) {
+        account_write_in(section, account_record_keys[i], record->values[i]);
+    }
+}
+
+/* [host:port|<xuid>] */
+static int record_section(const wchar_t *xuid, wchar_t *out, size_t cap) {
+    size_t s = wide_len(account_server), x = wide_len(xuid);
+    if (!x || s + x + 2 > cap) {
+        return 0;
+    }
+    memory_copy(out, account_server, s * sizeof(wchar_t));
+    out[s] = L'|';
+    memory_copy(out + s + 1, xuid, (x + 1) * sizeof(wchar_t));
+    return 1;
+}
+
+static int wide_equal(const wchar_t *a, const wchar_t *b) {
+    size_t n = wide_len(a);
+    return n == wide_len(b) && memory_equal(a, b, n * sizeof(wchar_t));
+}
+
+/* Every section name of FH2Online_Accounts.ini, one after another (NUL each, a final NUL). */
+static const wchar_t *account_section_names(void) {
+    account_sections[0] = account_sections[1] = 0;
+    GetPrivateProfileStringW(0, 0, L"", account_sections, ACCOUNT_SECTIONS_CAP, account_file);
+    return account_sections;
+}
+
+/* `name` is one of this server's saved profiles ([host:port|xuid]). */
+static int record_is_mine(const wchar_t *name) {
+    size_t s = wide_len(account_server);
+    return wide_len(name) > s + 1 && memory_equal(name, account_server, s * sizeof(wchar_t)) && name[s] == L'|';
+}
+
+/* The profile in use goes to its waiting section (before another takes its place). At most
+   ACCOUNT_PROFILES_MAX - 1 wait: one more, and the first one found is forgotten here (it
+   stays on the server). */
+static void record_stash(const AccountRecord *active) {
+    wchar_t section[320];
+    if (!active->values[1][0] || !record_section(active->values[1], section, ARRAY_COUNT(section))) {
+        return;
+    }
+    record_write(section, active);
+    int waiting = 0;
+    const wchar_t *first = 0;
+    for (const wchar_t *name = account_section_names(); *name; name += wide_len(name) + 1) {
+        if (record_is_mine(name) && !wide_equal(name, section)) {
+            ++waiting;
+            first = first ? first : name;
+        }
+    }
+    if (waiting >= ACCOUNT_PROFILES_MAX - 1 && first) {
+        account_write_in(first, 0, 0);
+    }
+}
+
+/* The globals again from the [host:port] section (after a section moved in or back). */
+static void account_load_active(void) {
+    GetPrivateProfileStringW(account_server, L"Token", L"", account_token, ARRAY_COUNT(account_token), account_file);
+    GetPrivateProfileStringW(account_server, L"Xuid", L"", account_xuid, ARRAY_COUNT(account_xuid), account_file);
+    GetPrivateProfileStringW(account_server, L"Gamertag", L"", account_gamertag, ARRAY_COUNT(account_gamertag),
+                             account_file);
+    GetPrivateProfileStringW(account_server, L"WebKey", L"", account_web_key, ARRAY_COUNT(account_web_key),
+                             account_file);
+    GetPrivateProfileStringW(account_server, L"Online", L"1", account_online, ARRAY_COUNT(account_online),
+                             account_file);
+}
+
+/* SHA-1 (the server keeps device tokens by their SHA-1 hex). */
+static unsigned account_rol(unsigned v, int n) {
+    return v << n | v >> (32 - n);
+}
+
+static void account_sha1_hex(const char *text, char out[41]) {
+    unsigned h[5] = {0x67452301u, 0xefcdab89u, 0x98badcfeu, 0x10325476u, 0xc3d2e1f0u};
+    size_t length = text_length(text);
+    unsigned char block[64];
+    unsigned long long bits = (unsigned long long)length * 8;
+    size_t total = (length + 9 + 63) / 64 * 64;
+    for (size_t offset = 0; offset < total; offset += 64) {
+        for (size_t i = 0; i < 64; ++i) {
+            size_t at = offset + i;
+            block[i] = at < length ? (unsigned char)text[at]
+                       : at == length ? 0x80
+                       : at >= total - 8 ? (unsigned char)(bits >> (8 * (total - 1 - at)))
+                                          : 0;
+        }
+        unsigned w[80];
+        for (int i = 0; i < 16; ++i) {
+            w[i] = (unsigned)block[4 * i] << 24 | (unsigned)block[4 * i + 1] << 16 | (unsigned)block[4 * i + 2] << 8 |
+                   block[4 * i + 3];
+        }
+        for (int i = 16; i < 80; ++i) {
+            w[i] = account_rol(w[i - 3] ^ w[i - 8] ^ w[i - 14] ^ w[i - 16], 1);
+        }
+        unsigned a = h[0], b = h[1], c = h[2], d = h[3], e = h[4];
+        for (int i = 0; i < 80; ++i) {
+            unsigned f, k;
+            if (i < 20) {
+                f = (b & c) | (~b & d), k = 0x5a827999u;
+            } else if (i < 40) {
+                f = b ^ c ^ d, k = 0x6ed9eba1u;
+            } else if (i < 60) {
+                f = (b & c) | (b & d) | (c & d), k = 0x8f1bbcdcu;
+            } else {
+                f = b ^ c ^ d, k = 0xca62c1d6u;
+            }
+            unsigned t = account_rol(a, 5) + f + e + k + w[i];
+            e = d, d = c, c = account_rol(b, 30), b = a, a = t;
+        }
+        h[0] += a, h[1] += b, h[2] += c, h[3] += d, h[4] += e;
+    }
+    unsigned char digest[20];
+    for (int i = 0; i < 20; ++i) {
+        digest[i] = (unsigned char)(h[i / 4] >> (24 - 8 * (i % 4)));
+    }
+    hex_text(digest, 20, out);
+}
+
+/* 64 hex digits, as the server makes tokens. */
+static int account_token_shape(const wchar_t *token) {
+    if (wide_len(token) != 64) {
+        return 0;
+    }
+    for (int i = 0; i < 64; ++i) {
+        wchar_t c = token[i];
+        if (!((c >= L'0' && c <= L'9') || (c >= L'a' && c <= L'f') || (c >= L'A' && c <= L'F'))) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+/* Sections of other addresses with a token: the candidates account_adopt asks about. */
+static int account_other_tokens(void) {
+    int found = 0;
+    for (const wchar_t *name = account_section_names(); *name; name += wide_len(name) + 1) {
+        wchar_t token[72];
+        if (wide_equal(name, account_server) || record_is_mine(name)) {
+            continue;
+        }
+        GetPrivateProfileStringW(name, L"Token", L"", token, ARRAY_COUNT(token), account_file);
+        found += account_token_shape(token);
+    }
+    return found;
+}
+
+/* The profiles of this server saved under another address are copied in (the first, when
+   this address had none, becomes the one in use, with its Online). 1 when one is in use now. */
+static int account_adopt(void) {
+    static char body[16 * 46 + 32], reply[4096];
+    static wchar_t names[16][320];
+    static char hashes[16][41];
+    int count = 0;
+    body[0] = 0;
+    text_add(body, sizeof(body), "{\"tokens\":[");
+    for (const wchar_t *name = account_section_names(); *name && count < 16; name += wide_len(name) + 1) {
+        wchar_t token[72];
+        char ascii[72];
+        if (wide_equal(name, account_server) || record_is_mine(name) || wide_len(name) >= 320) {
+            continue;
+        }
+        GetPrivateProfileStringW(name, L"Token", L"", token, ARRAY_COUNT(token), account_file);
+        if (!account_token_shape(token)) {
+            continue;
+        }
+        wide_to_ascii(token, ascii, sizeof(ascii));
+        account_sha1_hex(ascii, hashes[count]);
+        memory_copy(names[count], name, (wide_len(name) + 1) * sizeof(wchar_t));
+        text_add(body, sizeof(body), count ? ",\"" : "\"");
+        text_add(body, sizeof(body), hashes[count]);
+        text_add(body, sizeof(body), "\"");
+        ++count;
+    }
+    text_add(body, sizeof(body), "]}");
+    if (!count || azimuth_net_call_quick(L"POST", L"/infinity/v1/accounts/known", 0, body, reply, sizeof(reply), 4000) !=
+                      200) {
+        return account_token[0] != 0;
+    }
+    size_t length = text_length(reply);
+    for (int i = 0; i < count; ++i) {
+        if (!text_find(reply, length, hashes[i])) {
+            continue;
+        }
+        AccountRecord record;
+        wchar_t online[4], section[320], have[24];
+        char tag[32];
+        record_read(names[i], &record);
+        GetPrivateProfileStringW(names[i], L"Online", L"1", online, ARRAY_COUNT(online), account_file);
+        /* already here (in use, or waiting) */
+        GetPrivateProfileStringW(account_server, L"Xuid", L"", have, ARRAY_COUNT(have), account_file);
+        if (wide_equal(have, record.values[1]) ||
+            (record_section(record.values[1], section, ARRAY_COUNT(section)) &&
+             GetPrivateProfileStringW(section, L"Xuid", L"", have, ARRAY_COUNT(have), account_file))) {
+            continue;
+        }
+        if (!account_token[0]) {
+            record_write(account_server, &record);
+            account_write(L"Online", online);
+            account_load_active();
+        } else {
+            record_stash(&record);
+        }
+        wide_to_ascii(record.values[2], tag, sizeof(tag));
+        account_log("this server's profile, saved under another address, is kept here too: ", tag);
+    }
+    return account_token[0] != 0;
+}
+
+/* The profiles this PC created on the server (any address it had), by its device id: for the
+   SWITCH PROFILE list, and to tell a PC with none saved that it has some. */
+static DWORD account_device_profiles(char *reply, size_t cap, int timeout_ms) {
+    static char body[128];
+    body[0] = 0;
+    text_add(body, sizeof(body), "{\"device\":\"");
+    text_add(body, sizeof(body), account_device);
+    text_add(body, sizeof(body), "\"}");
+    return azimuth_net_call_quick(L"POST", L"/infinity/v1/device/accounts", 0, body, reply, cap, timeout_ms);
+}
+
+static int profile_find(const AccountProfile *list, int count, const wchar_t *xuid) {
+    for (int i = 0; i < count; ++i) {
+        if (wide_equal(list[i].xuid, xuid)) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+static void profile_copy(wchar_t *out, size_t cap, const wchar_t *in) {
+    size_t n = 0;
+    while (in && in[n] && n + 1 < cap) {
+        out[n] = in[n];
+        ++n;
+    }
+    out[n] = 0;
+}
+
+int azimuth_account_profiles(AccountProfile *out, int cap, int ask_server) {
+    int count = 0;
+    if (!account_available || cap <= 0) {
+        return 0;
+    }
+    /* this server's profiles saved under other addresses join the list (waiting) */
+    if (ask_server && account_other_tokens()) {
+        account_adopt();
+    }
+    if (account_xuid[0] && account_gamertag[0]) {
+        AccountProfile *p = &out[count++];
+        memory_copy(p, &(AccountProfile){0}, sizeof(*p));
+        profile_copy(p->xuid, ARRAY_COUNT(p->xuid), account_xuid);
+        profile_copy(p->gamertag, ARRAY_COUNT(p->gamertag), account_gamertag);
+        profile_copy(p->web_key, ARRAY_COUNT(p->web_key), account_web_key);
+        p->current = account_active ? 2 : 1;
+        p->saved = account_token[0] != 0;
+    }
+    for (const wchar_t *name = account_section_names(); *name && count < cap; name += wide_len(name) + 1) {
+        if (!record_is_mine(name)) {
+            continue;
+        }
+        AccountRecord record;
+        record_read(name, &record);
+        if (!record.values[1][0] || !record.values[2][0] || profile_find(out, count, record.values[1]) >= 0) {
+            continue;
+        }
+        AccountProfile *p = &out[count++];
+        memory_copy(p, &(AccountProfile){0}, sizeof(*p));
+        profile_copy(p->xuid, ARRAY_COUNT(p->xuid), record.values[1]);
+        profile_copy(p->gamertag, ARRAY_COUNT(p->gamertag), record.values[2]);
+        profile_copy(p->web_key, ARRAY_COUNT(p->web_key), record.values[3]);
+        p->saved = account_token_shape(record.values[0]);
+    }
+    static char reply[2048];
+    if (!ask_server || account_device_profiles(reply, sizeof(reply), 2500) != 200) {
+        return count;
+    }
+    size_t length = text_length(reply);
+    for (const char *at = reply; (at = text_find(at, length - (size_t)(at - reply), "{\"xuid\"")) != 0; ++at) {
+        char xuid[24], tag[32];
+        wchar_t wide_xuid[24];
+        if (!json_string(at, "xuid", xuid, sizeof(xuid)) || !json_string(at, "gamertag", tag, sizeof(tag))) {
+            continue;
+        }
+        const char *end = text_find(at, length - (size_t)(at - reply), "}");
+        int suspended = end && text_find(at, (size_t)(end - at), "\"suspended\":true") != 0;
+        utf8_to_wide(xuid, wide_xuid, ARRAY_COUNT(wide_xuid));
+        int i = profile_find(out, count, wide_xuid);
+        if (i < 0 && count < cap) {
+            i = count++;
+            memory_copy(&out[i], &(AccountProfile){0}, sizeof(out[i]));
+            profile_copy(out[i].xuid, ARRAY_COUNT(out[i].xuid), wide_xuid);
+            utf8_to_wide(tag, out[i].gamertag, ARRAY_COUNT(out[i].gamertag));
+        }
+        if (i >= 0) {
+            out[i].made_here = 1;
+            out[i].suspended = suspended;
+        }
+    }
+    return count;
+}
+
+static void account_drop_waiting(const wchar_t *xuid);
+
+int azimuth_account_saved_profiles(void) {
+    AccountProfile list[ACCOUNT_PROFILES_MAX];
+    return azimuth_account_profiles(list, ACCOUNT_PROFILES_MAX, 0);
+}
+
 /* -------------------------------------------------------- identity patch */
 
 /* Rewrites Azimuth's player-name std::wstring (ptr/inline buffer, size +0x10, capacity
@@ -401,6 +744,18 @@ static void account_error(DWORD status, const char *reply, wchar_t *message, siz
 static DWORD WINAPI account_thread(void *unused) {
     static char reply[2048], text[400], gamertag[32];
     (void)unused;
+    /* no profile under this address: one of this server's saved under another comes in */
+    if (!account_token[0]) {
+        if (!account_adopt() || account_online[0] != L'1') {
+            log_append(account_token[0] ? "ACCOUNT: account kept but Online=0; playing the offline profile.\r\n"
+                                        : "ACCOUNT: no account on this server yet (Settings > Infinity creates one).\r\n");
+            InterlockedExchange(&account_ready, 1);
+            return 0;
+        }
+        wchar_t storm[4];
+        GetPrivateProfileStringW(account_server, L"StormIsland", L"0", storm, ARRAY_COUNT(storm), account_file);
+        InterlockedExchange(&account_storm_island, storm[0] == L'1');
+    }
     DWORD status = azimuth_net_call(L"GET", L"/infinity/v1/me", account_token_header(), 0, reply, sizeof(reply));
     if (status == 200 && account_take(reply)) {
         account_active = 1;
@@ -479,12 +834,14 @@ const wchar_t *azimuth_account_server(void) {
     return account_server ? account_server : L"";
 }
 
-/* Creates "name#12345" on the server (one account per PC) from the player's offline progress:
-   the newest offline save becomes the profile's cloud save (azimuth_cloud_upload_offline). If
-   that fails the new account is deleted again, so no empty profile is left. On success the
-   account is kept with Online=1, so the next start plays as it. */
+/* Creates "name#12345" on the server (up to ACCOUNT_PROFILES_MAX per PC) from the player's
+   offline progress: the newest offline save becomes the profile's cloud save
+   (azimuth_cloud_upload_offline). If that fails the new account is deleted again, so no empty
+   profile is left. On success the account is kept with Online=1, so the next start plays as
+   it; the profile that was in use waits in its own section (SWITCH PROFILE). */
 int azimuth_account_register(const wchar_t *name, wchar_t *message, size_t cap) {
     static char reply[2048], body[256];
+    static AccountRecord before;
     char ascii[24];
     if (!account_available || !azimuth_account_valid_name(name)) {
         utf8_to_wide(azimuth_tr8("The name must have 1 to 20 letters or digits and start with a letter."), message, cap);
@@ -499,16 +856,22 @@ int azimuth_account_register(const wchar_t *name, wchar_t *message, size_t cap) 
     text_add(body, sizeof(body), "\",\"device\":\"");
     text_add(body, sizeof(body), account_device);
     text_add(body, sizeof(body), "\"}");
+    record_read(account_server, &before);
     DWORD status = azimuth_net_call(L"POST", L"/infinity/v1/register", 0, body, reply, sizeof(reply));
     if (status != 200 || !account_take(reply) || !account_token[0]) {
         account_error(status, reply, message, cap);
-        account_token[0] = 0;
+        record_write(account_server, &before);
+        account_load_active();
         return 0;
     }
+    record_stash(&before);
+    account_write(L"SaveCommit", L"");
     const char *why = "";
     if (!azimuth_cloud_upload_offline(account_directory, account_token, account_file, account_server, &why)) {
         azimuth_net_call(L"POST", L"/infinity/v1/delete", account_token_header(), "{}", reply, sizeof(reply));
-        account_token[0] = 0;
+        record_write(account_server, &before);
+        account_drop_waiting(before.values[1]);
+        account_load_active();
         account_log("profile not created, offline save not uploaded: ", why);
         utf8_to_wide(azimuth_tr8("Your offline progress could not be copied to the server, so the profile was not "
                                  "created. Play until the game saves, check the connection in Test connection, then "
@@ -579,20 +942,101 @@ int azimuth_account_log_in(const wchar_t *gamertag, const wchar_t *web_key, wcha
     text_add(body, sizeof(body), "\",\"webKey\":\"");
     text_add(body, sizeof(body), key);
     text_add(body, sizeof(body), "\"}");
-    static wchar_t old_token[72];
-    memory_copy(old_token, account_token, sizeof(account_token));
+    static AccountRecord before;
+    record_read(account_server, &before);
     DWORD status = azimuth_net_call(L"POST", L"/infinity/v1/login", 0, body, reply, sizeof(reply));
     if (status != 200 || !account_take(reply) || !account_token[0] || wide_len(account_token) != 64) {
         account_error(status, reply, message, cap);
-        memory_copy(account_token, old_token, sizeof(account_token));
+        record_write(account_server, &before);
+        account_load_active();
         return 0;
     }
+    if (!wide_equal(before.values[1], account_xuid)) {
+        record_stash(&before);
+    }
+    account_drop_waiting(account_xuid);
     memory_copy(account_online, L"1", sizeof(L"1"));
     account_save();
     account_write(L"SaveCommit", L""); /* this PC never synced this profile */
     account_notice[0] = 0;
     wide_to_ascii(account_gamertag, tag, sizeof(tag));
     account_log("logged in as ", tag);
+    return 1;
+}
+
+/* The waiting section of `xuid` goes (it is the one in use now). */
+static void account_drop_waiting(const wchar_t *xuid) {
+    wchar_t section[320];
+    if (record_section(xuid, section, ARRAY_COUNT(section))) {
+        account_write_in(section, 0, 0);
+    }
+}
+
+/* SWITCH PROFILE: the next start plays `profile`. A saved one swaps sections with the one in
+   use; one this PC created but no longer has the token of (signed in elsewhere, or the INI was
+   lost) is signed in again by the device id (POST device/recover: the other PC goes offline,
+   the site key is replaced). The game is restarted by the caller. A cloud upload of the
+   profile that was in use, landing between this and the restart, only makes the next start
+   take the server's save. */
+int azimuth_account_switch(const AccountProfile *profile, wchar_t *message, size_t cap) {
+    static char reply[2048], body[160];
+    static AccountRecord before, chosen;
+    wchar_t section[320];
+    char tag[32];
+    if (!account_available || !profile || !profile->xuid[0]) {
+        utf8_to_wide(azimuth_tr8("Infinity is not available on this PC."), message, cap);
+        return 0;
+    }
+    if (profile->suspended) {
+        utf8_to_wide(azimuth_tr8("This profile is suspended on this server."), message, cap);
+        return 0;
+    }
+    wide_to_ascii(profile->gamertag, tag, sizeof(tag));
+    record_read(account_server, &before);
+    if (profile->current && profile->saved) {
+        azimuth_account_set_online(1);
+        account_log("switching back on: ", tag);
+        return 1;
+    }
+    if (profile->saved && record_section(profile->xuid, section, ARRAY_COUNT(section))) {
+        record_read(section, &chosen);
+        record_stash(&before);
+        record_write(account_server, &chosen);
+        account_drop_waiting(profile->xuid);
+        azimuth_account_set_online(1);
+        account_load_active();
+        account_log("switched to the saved profile ", tag);
+        return 1;
+    }
+    if (!profile->made_here) {
+        utf8_to_wide(azimuth_tr8("This PC no longer has this profile's sign-in. Sign in with the profile and its site key (shown in Settings > Infinity on the PC that has it now)."),
+                     message, cap);
+        return 0;
+    }
+    char xuid[24];
+    wide_to_ascii(profile->xuid, xuid, sizeof(xuid));
+    body[0] = 0;
+    text_add(body, sizeof(body), "{\"device\":\"");
+    text_add(body, sizeof(body), account_device);
+    text_add(body, sizeof(body), "\",\"xuid\":\"");
+    text_add(body, sizeof(body), xuid);
+    text_add(body, sizeof(body), "\"}");
+    DWORD status = azimuth_net_call(L"POST", L"/infinity/v1/device/recover", 0, body, reply, sizeof(reply));
+    if (status != 200 || !account_take(reply) || !account_token_shape(account_token)) {
+        account_error(status, reply, message, cap);
+        record_write(account_server, &before);
+        account_load_active();
+        return 0;
+    }
+    if (!wide_equal(before.values[1], account_xuid)) {
+        record_stash(&before);
+    }
+    account_drop_waiting(account_xuid);
+    memory_copy(account_online, L"1", sizeof(L"1"));
+    account_save();
+    account_write(L"SaveCommit", L""); /* the server's save is this profile's */
+    account_notice[0] = 0;
+    account_log("signed in again on the PC that created it: ", tag);
     return 1;
 }
 
@@ -683,6 +1127,22 @@ static DWORD WINAPI account_link_thread(void *unused) {
     InterlockedExchange(&account_link, status == 200 ? 1 : 2);
     if (status == 200) {
         account_check_update(reply);
+    }
+    /* nothing to play here, but the server knows profiles this PC created (the INI was lost,
+       or they were signed in elsewhere): the INFINITY screen says where they are */
+    for (unsigned waited = 0; !account_ready && waited < ACCOUNT_WAIT_MS; waited += 100) {
+        account_sleep(100);
+    }
+    if (status == 200 && !account_active && !account_token[0]) {
+        static AccountProfile list[ACCOUNT_PROFILES_MAX];
+        int count = azimuth_account_profiles(list, ACCOUNT_PROFILES_MAX, 1), made = 0;
+        for (int i = 0; i < count; ++i) {
+            made += list[i].made_here && !list[i].saved;
+        }
+        if (made) {
+            azimuth_account_set_notice("This PC has Infinity profiles on this server that it is not signed in to. Open SWITCH PROFILE to play one again: no site key needed on the PC that created it.");
+            account_log("profiles of this PC on the server, not signed in here: listed in SWITCH PROFILE.", "");
+        }
     }
     return 0;
 }
@@ -892,7 +1352,7 @@ const wchar_t *azimuth_account_token(void) {
     return account_ready && account_active && account_token[0] ? account_token : 0;
 }
 
-void azimuth_apply_account(const wchar_t *directory) {
+static void account_apply(const wchar_t *directory) {
     if (!azimuth_net_proxy_enabled() || !(account_server = azimuth_net_server_name())) {
         return;
     }
@@ -912,10 +1372,6 @@ void azimuth_apply_account(const wchar_t *directory) {
         return;
     }
     account_available = 1;
-    HANDLE link = CreateThread(0, 0, account_link_thread, 0, 0, 0);
-    if (link) {
-        CloseHandle(link);
-    }
     GetPrivateProfileStringW(account_server, L"Token", L"", account_token, ARRAY_COUNT(account_token), account_file);
     GetPrivateProfileStringW(account_server, L"Xuid", L"", account_xuid, ARRAY_COUNT(account_xuid), account_file);
     GetPrivateProfileStringW(account_server, L"Gamertag", L"", account_gamertag, ARRAY_COUNT(account_gamertag),
@@ -925,11 +1381,14 @@ void azimuth_apply_account(const wchar_t *directory) {
     GetPrivateProfileStringW(account_server, L"Online", L"1", account_online, ARRAY_COUNT(account_online),
                              account_file);
     account_log("fingerprint #", account_discriminator);
-    if (!account_token[0]) {
+    /* none under this address, but tokens under others: the account thread asks the server
+       whether one of them is its (account_adopt) before the game reads the identity */
+    int adopt = !account_token[0] && account_other_tokens();
+    if (!account_token[0] && !adopt) {
         log_append("ACCOUNT: no account on this server yet (Settings > Infinity creates one).\r\n");
         return;
     }
-    if (account_online[0] != L'1') {
+    if (!adopt && account_online[0] != L'1') {
         log_append("ACCOUNT: account kept but Online=0; playing the offline profile.\r\n");
         return;
     }
@@ -954,4 +1413,15 @@ void azimuth_apply_account(const wchar_t *directory) {
         return;
     }
     CloseHandle(thread);
+}
+
+void azimuth_apply_account(const wchar_t *directory) {
+    account_apply(directory);
+    /* after the stored profile is read (and its check started): the link thread looks at it */
+    if (account_available) {
+        HANDLE link = CreateThread(0, 0, account_link_thread, 0, 0, 0);
+        if (link) {
+            CloseHandle(link);
+        }
+    }
 }

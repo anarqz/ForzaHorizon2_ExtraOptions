@@ -90,6 +90,22 @@ void azimuth_account_set_online(int online);
 void azimuth_account_restart(void);
 int azimuth_account_log_in(const wchar_t *gamertag, const wchar_t *web_key, wchar_t *message, size_t cap);
 const wchar_t *azimuth_account_notice(void);
+/* SWITCH PROFILE: the Infinity profiles of this PC on this server (at most
+   ACCOUNT_PROFILES_MAX, the one in use first), from FH2Online_Accounts.ini and, with
+   `ask_server`, the server's list of the ones this PC created. */
+#define ACCOUNT_PROFILES_MAX 3
+typedef struct {
+    wchar_t xuid[24], gamertag[32], web_key[24];
+    int current;   /* the [host:port] one: 2 playing it now, 1 kept but this session is offline */
+    int saved;     /* its token is on this PC */
+    int made_here; /* this PC created it: it plays it again without the site key */
+    int suspended;
+} AccountProfile;
+int azimuth_account_profiles(AccountProfile *out, int cap, int ask_server);
+/* How many azimuth_account_profiles lists without asking the server. */
+int azimuth_account_saved_profiles(void);
+/* The next start plays `profile` (1), or `message` says why not (0). */
+int azimuth_account_switch(const AccountProfile *profile, wchar_t *message, size_t cap);
 /* The friendship with a player picked in the game (player actions): 2 friends, 1 asked them,
    3 they asked, 0 neither, -1 unknown; and adding / removing them. */
 int azimuth_account_friend_state(unsigned long long xuid);

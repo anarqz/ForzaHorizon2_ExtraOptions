@@ -279,7 +279,7 @@ static void menu_keyboard(const wchar_t *title, const wchar_t *description, int 
 
 /* --------------------------------------------------------------- text */
 
-static wchar_t menu_line[1024];
+static wchar_t menu_line[2048];
 
 static void line_start(void) {
     menu_line[0] = 0;
@@ -353,6 +353,7 @@ static void menu_show_created(void) {
 /* Create profile: the name; the profile starts from the player's newest offline save. */
 static void menu_ask_name(void);
 static void menu_ask_key(void);
+static void menu_switch(void);
 static void menu_add_friend(void);
 
 /* Something went wrong: say what, and offer the step again. */
@@ -457,7 +458,8 @@ static void menu_deleted(void) {
     static const MenuButton restart[1] = {{L"Restart now", menu_restart}};
     menu_popup(L"PROFILE DELETED",
                L"Your online profile and everything it had on the server are gone. The game will close and open "
-               L"again on your offline profile, which was not touched.",
+               L"again on your offline profile, which was not touched.\n\nOther profiles saved on this PC stay "
+               L"in SWITCH PROFILE.",
                restart, 1);
 }
 
@@ -699,13 +701,13 @@ static void menu_test_connection(void) {
 
 static void menu_more(void) {
     static const MenuButton buttons[3] = {{L"New site key", menu_new_key},
-                                          {L"Sign in to another profile", menu_log_in},
+                                          {L"Switch profile", menu_switch},
                                           {L"Leave Infinity", menu_confirm_leave}};
     menu_popup(L"INFINITY",
                L"The site key signs you in to the server's site and lets you use this profile on another PC. "
-               L"A new one makes the previous one stop working.\n\nSigning in to another profile switches this "
-               L"PC's profile (the current one stays on the server). Leaving Infinity restarts the game on your "
-               L"offline profile.",
+               L"A new one makes the previous one stop working.\n\nSwitch profile lists this PC's profiles (up to 3) "
+               L"with their site keys and plays another one (the current one stays saved). Leaving Infinity restarts "
+               L"the game on your offline profile.",
                buttons, 3);
 }
 
@@ -754,6 +756,161 @@ static void menu_about(void) {
     menu_info(L"ABOUT INFINITY", menu_line);
 }
 
+/* ------------------------------------------------------- SWITCH PROFILE */
+
+/* The Infinity profiles of this PC on this server (azimuth_account_profiles: the INI's and
+   the ones the server says this PC created), each with its site key, in one of the game's
+   popups. Its buttons are the profiles to play (the game restarts on the one chosen) and the
+   options: sign in with a site key, a new profile, delete the one in use. A popup has three
+   buttons at most: with more, the third is More options, which shows the rest. */
+enum { MENU_ITEM_SIGN_IN = 10, MENU_ITEM_NEW, MENU_ITEM_DELETE };
+
+static AccountProfile menu_profiles[ACCOUNT_PROFILES_MAX];
+static int menu_profile_count, menu_profile_pick;
+static int menu_items[ACCOUNT_PROFILES_MAX + 3], menu_item_count, menu_item_from;
+
+static void menu_switch(void);
+static void menu_switch_page(void);
+
+static const AccountProfile *menu_profile_current(void) {
+    for (int i = 0; i < menu_profile_count; ++i) {
+        if (menu_profiles[i].current) {
+            return &menu_profiles[i];
+        }
+    }
+    return 0;
+}
+
+static void menu_switch_go(void) {
+    static wchar_t error[400];
+    if (!azimuth_account_switch(&menu_profiles[menu_profile_pick], error, ARRAY_COUNT(error))) {
+        menu_retry(L"SWITCH PROFILE", error, menu_switch);
+        return;
+    }
+    azimuth_account_restart();
+}
+
+static void menu_switch_pick(int index) {
+    static const MenuButton buttons[2] = {{L"Restart now", menu_switch_go}, {L"Back", menu_switch}};
+    const AccountProfile *pick = &menu_profiles[index], *current = menu_profile_current();
+    menu_profile_pick = index;
+    line_start();
+    line_add(L"Play as ");
+    menu_line_raw(pick->gamertag);
+    line_add(L"?\n\nThe game closes and opens again on this profile, with its save from the server.");
+    if (current && current != pick) {
+        line_add(L"\n");
+        menu_line_raw(current->gamertag);
+        line_add(L" stays saved on this PC.");
+    }
+    if (!pick->saved) {
+        line_add(L"\n\nThis PC is not signed in to it (signed in on another PC, or the sign-in was lost). Playing it here signs any other PC out of it and makes a new site key.");
+    }
+    menu_popup(L"SWITCH PROFILE", menu_line, buttons, 2);
+}
+
+static void menu_item_run(int item) {
+    switch (item) {
+    case MENU_ITEM_SIGN_IN:
+        menu_log_in();
+        break;
+    case MENU_ITEM_NEW:
+        menu_ask_name();
+        break;
+    case MENU_ITEM_DELETE:
+        menu_confirm_delete();
+        break;
+    default:
+        if (item >= 0 && item < menu_profile_count) {
+            menu_switch_pick(item);
+        }
+    }
+}
+
+static void menu_item_0(void) { menu_item_run(menu_items[menu_item_from]); }
+static void menu_item_1(void) { menu_item_run(menu_items[menu_item_from + 1]); }
+static void menu_item_2(void) { menu_item_run(menu_items[menu_item_from + 2]); }
+
+static void menu_switch_more(void) {
+    menu_item_from += 2;
+    menu_switch_page();
+}
+
+/* The list (menu_line, from menu_switch) with the items from menu_item_from on. */
+static void menu_switch_page(void) {
+    static const MenuAction runs[3] = {menu_item_0, menu_item_1, menu_item_2};
+    static wchar_t labels[3][32];
+    MenuButton buttons[3];
+    int left = menu_item_count - menu_item_from, shown = left > 3 ? 2 : left;
+    for (int i = 0; i < shown; ++i) {
+        int item = menu_items[menu_item_from + i];
+        const wchar_t *label = item == MENU_ITEM_SIGN_IN  ? L"Sign in with a site key"
+                               : item == MENU_ITEM_NEW    ? L"New profile"
+                               : item == MENU_ITEM_DELETE ? L"Delete my profile"
+                                                          : menu_profiles[item].gamertag;
+        size_t n = 0;
+        while (label[n] && n + 1 < ARRAY_COUNT(labels[i])) {
+            labels[i][n] = label[n];
+            ++n;
+        }
+        labels[i][n] = 0;
+        buttons[i].label = labels[i];
+        buttons[i].action = runs[i];
+    }
+    if (left > 3) {
+        buttons[shown].label = L"More options";
+        buttons[shown].action = menu_switch_more;
+        ++shown;
+    }
+    menu_popup(L"SWITCH PROFILE", menu_line, buttons, shown);
+}
+
+static void menu_switch(void) {
+    menu_profile_count = azimuth_account_profiles(menu_profiles, ACCOUNT_PROFILES_MAX, 1);
+    line_start();
+    if (!menu_profile_count) {
+        line_add(L"This PC has no Infinity profile on this server yet.\n\nSign in with a profile and its site key, or make a new one: it starts from your offline save.");
+    } else {
+        line_add(L"Infinity profiles of this PC (up to 3 per server):\n");
+    }
+    for (int i = 0; i < menu_profile_count; ++i) {
+        const AccountProfile *p = &menu_profiles[i];
+        line_add(L"\n");
+        menu_line_raw(p->gamertag);
+        line_add(p->suspended                  ? L"  (suspended)"
+                 : p->current == 2             ? L"  (playing now)"
+                 : p->current == 1 && p->saved ? L"  (in use, the game is offline now)"
+                 : !p->saved && p->made_here   ? L"  (not signed in here: no key needed to play it again)"
+                 : !p->saved                   ? L"  (signed in on another PC)"
+                                               : L"");
+        line_add(L"\nSite key: ");
+        if (p->web_key[0] && p->saved) {
+            menu_line_raw(p->web_key);
+        } else {
+            line_add(L"(on the PC it is signed in on)");
+        }
+        line_add(L"\n");
+    }
+    if (menu_profile_count) {
+        line_add(L"\nChoose a profile and the game restarts on it. Note your site keys: with the profile's name they sign you in on another PC and on the server's site.");
+    }
+    menu_item_count = menu_item_from = 0;
+    for (int i = 0; i < menu_profile_count; ++i) {
+        const AccountProfile *p = &menu_profiles[i];
+        if (p->current != 2 && !p->suspended && (p->saved || p->made_here)) {
+            menu_items[menu_item_count++] = i;
+        }
+    }
+    menu_items[menu_item_count++] = MENU_ITEM_SIGN_IN;
+    if (menu_profile_count < ACCOUNT_PROFILES_MAX) {
+        menu_items[menu_item_count++] = MENU_ITEM_NEW;
+    }
+    if (azimuth_account_state() >= 1) {
+        menu_items[menu_item_count++] = MENU_ITEM_DELETE;
+    }
+    menu_switch_page();
+}
+
 /* ------------------------------------------------------- INFINITY screen */
 
 static InfinityTile menu_tiles[INFINITY_TILE_COUNT];
@@ -799,19 +956,20 @@ const InfinityTile *azimuth_infinity_tiles(void) {
         menu_set_tile(2, "TEST CONNECTION", "Icons/TiledMenus/Controls.png", 0, menu_test_connection);
         menu_set_tile(9, "FIND WORLD", "Icons/TiledMenus/CustomUpgrade.png", 0, menu_find_world);
         menu_set_tile(3, "SITE KEY", "Icons/TiledMenus/Options.png", 0, menu_show_key);
-        menu_set_tile(4, "SWITCH PROFILE", "Icons/TiledMenus/Garage.png", 0, menu_log_in);
+        menu_set_tile(4, "SWITCH PROFILE", "Icons/TiledMenus/Garage.png", 0, menu_switch);
         menu_set_tile(5, "ABOUT", "Icons/TiledMenus/Video.png", 0, menu_about);
         menu_set_tile(6, "LEAVE INFINITY", "Icons/TiledMenus/Difficulty.png", 0, menu_confirm_leave);
     } else if (state == 1) {
         menu_set_tile(0, "PROFILE", "Icons/TiledMenus/Autoshow.png", 0, menu_profile);
         menu_set_tile(1, "JOIN AND RESTART", "PauseMenuTileBackgrounds/OnlineRoadtrip.png", 1, menu_join);
         menu_set_tile(2, "TEST CONNECTION", "PauseMenuTileBackgrounds/OnlineFreeroam.png", 1, menu_test_connection);
-        menu_set_tile(3, "SWITCH PROFILE", "Icons/TiledMenus/Garage.png", 0, menu_log_in);
+        menu_set_tile(3, "SWITCH PROFILE", "Icons/TiledMenus/Garage.png", 0, menu_switch);
         menu_set_tile(4, "ABOUT", "Icons/TiledMenus/Options.png", 0, menu_about);
     } else {
         menu_set_tile(0, "PROFILE", "Icons/TiledMenus/Autoshow.png", 0, menu_profile);
         menu_set_tile(1, "CREATE PROFILE", "PauseMenuTileBackgrounds/MyRivals.png", 1, menu_ask_name);
-        menu_set_tile(2, "SIGN IN", "PauseMenuTileBackgrounds/OnlineRoadtrip.png", 1, menu_log_in);
+        menu_set_tile(2, azimuth_account_saved_profiles() ? "SWITCH PROFILE" : "SIGN IN",
+                      "PauseMenuTileBackgrounds/OnlineRoadtrip.png", 1, menu_switch);
         menu_set_tile(3, "TEST CONNECTION", "Icons/TiledMenus/Options.png", 0, menu_test_connection);
         menu_set_tile(4, "ABOUT", "Icons/TiledMenus/TeamCredits.png", 0, menu_about);
     }
@@ -844,7 +1002,7 @@ static void menu_click(void *page) {
     switch (azimuth_account_state()) {
     case 0: {
         static const MenuButton buttons[3] = {{L"Create profile", menu_ask_name},
-                                              {L"Sign in", menu_log_in},
+                                              {L"Sign in", menu_switch},
                                               {L"Test connection", menu_test_connection}};
         line_start();
         if (azimuth_account_notice()[0]) {
