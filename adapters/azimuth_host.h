@@ -32,6 +32,9 @@ void azimuth_apply_livery_compatibility(void);
 void azimuth_apply_save_compatibility(int disable_checksums);
 void azimuth_apply_network(const wchar_t *directory);
 void azimuth_apply_economy_probe(unsigned char *game_image);
+/* azimuth_events.c: entering an event in free roam online goes back to free roam (the relay does
+   not run races yet). */
+void azimuth_apply_events(unsigned char *game_image);
 void azimuth_apply_no_game_clips(unsigned char *game_image);
 void azimuth_apply_pad(void);
 /* azimuth_ini.c: FH2_ExtraOptions.ini gets ForzaInfinity's [Network] (or the template when there

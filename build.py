@@ -109,6 +109,7 @@ def build(compiler, output, directory, options):
             "adapters/azimuth_world.c",
             "adapters/azimuth_proxy.c",
             "adapters/azimuth_carstate.c",
+            "adapters/azimuth_events.c",
             "adapters/azimuth_ini.c",
             "adapters/azimuth_pad.c",
             "adapters/azimuth_account.c",
