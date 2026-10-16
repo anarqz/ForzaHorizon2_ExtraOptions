@@ -1166,7 +1166,7 @@ int azimuth_account_banner(char *out, size_t cap, const char **color) {
     LONG link = account_link;
     int update = azimuth_update_state();
     if (azimuth_cloud_stopped()) {
-        text_add(out, cap, azimuth_tr8("INFINITY  |  CLOUD SYNC STOPPED: PROGRESS REJECTED  |  RESTART THE GAME"));
+        text_add(out, cap, azimuth_tr8("INFINITY  |  RESTART YOUR GAME"));
         *color = "#ff4f4f";
     } else if (update == UPDATE_INSTALLED) {
         text_add(out, cap, azimuth_tr8("INFINITY  |  UPDATE INSTALLED  |  RESTART THE GAME"));

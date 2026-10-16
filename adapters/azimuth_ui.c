@@ -129,20 +129,36 @@ static int ui_edit_options(const char *page, unsigned length, UiText *out) {
 
 /* The pause menu with the status line after its player bar (same top margin as the bar).
    `text` is either a literal or "{local:Loc Category.Key}". */
-static int ui_edit_pause(const char *page, unsigned length, const char *text, UiText *out) {
+/* `alert1` / `alert2`: the texts of two more lines in red, in the same place (Loc bindings of the
+   live alert strings; 0 for none). */
+static int ui_edit_pause(const char *page, unsigned length, const char *text, const char *alert1, const char *alert2,
+                         UiText *out) {
     const char *bar = ui_find(page, length, "x:Name=\"TopBar\" />", 0);
     if (!bar || ui_find(page, length, "x:Name=\"TopBar\" />", (unsigned)(bar - page) + 1)) {
         return 0;
     }
     const char *at = page;
     out->length = 0;
-    return ui_copy(out, &at, bar + text_length("x:Name=\"TopBar\" />"), 0,
-                   "\r\n        <local:FZTextBlock HorizontalAlignment=\"Center\" VerticalAlignment=\"Top\" "
-                   "Margin=\"0,40,0,0\" Text=\"") &&
-           ui_copy(out, &at, at, 0, text) &&
-           ui_copy(out, &at, at, 0,
-                   "\" Style=\"{StaticResource A_Style_FZTextBlock_AnthemA}\" Color=\"#f5f5f5\" FontSize=\"24\" />") &&
-           ui_copy(out, &at, page + length, 0, 0);
+    int ok = ui_copy(out, &at, bar + text_length("x:Name=\"TopBar\" />"), 0,
+                     "\r\n        <local:FZTextBlock HorizontalAlignment=\"Center\" VerticalAlignment=\"Top\" "
+                     "Margin=\"0,40,0,0\" Text=\"") &&
+             ui_copy(out, &at, at, 0, text) &&
+             ui_copy(out, &at, at, 0,
+                     "\" Style=\"{StaticResource A_Style_FZTextBlock_AnthemA}\" Color=\"#f5f5f5\" FontSize=\"24\" />");
+    if (ok && alert1 && alert2) {
+        ok = ui_copy(out, &at, at, 0,
+                     "\r\n        <local:FZTextBlock HorizontalAlignment=\"Center\" VerticalAlignment=\"Top\" "
+                     "Margin=\"0,40,0,0\" Text=\"") &&
+             ui_copy(out, &at, at, 0, alert1) &&
+             ui_copy(out, &at, at, 0,
+                     "\" Style=\"{StaticResource A_Style_FZTextBlock_AnthemA}\" Color=\"#ff4f4f\" FontSize=\"24\" />"
+                     "\r\n        <local:FZTextBlock HorizontalAlignment=\"Center\" VerticalAlignment=\"Top\" "
+                     "Margin=\"0,72,0,0\" Text=\"") &&
+             ui_copy(out, &at, at, 0, alert2) &&
+             ui_copy(out, &at, at, 0,
+                     "\" Style=\"{StaticResource A_Style_FZTextBlock_AnthemA}\" Color=\"#ff4f4f\" FontSize=\"24\" />");
+    }
+    return ok && ui_copy(out, &at, page + length, 0, 0);
 }
 
 /* ------------------------------------------------------- live status line */
@@ -163,12 +179,17 @@ typedef void(WINAPI *UiSleepFn)(DWORD);
 
 static const char *const ui_status_keys[] = {
     "IDS_P2_Wave_To_Signin", "IDS_Will_Now_Choose_Car", "IDS_Choose_Car", "IDS_Player_2", "IDS_Guest",
-    "IDS_Choose_The_Track", "IDS_Choose_Your_Car", "IDS_Scroll_Directions", "IDS_Kinect_Splitscreen",
+    "IDS_Choose_The_Track", "IDS_Choose_Your_Car", "IDS_Kinect_Splitscreen",
     "IDS_Requires_Two_Players", "IDS_Looking_For_Player_2", "IDS_Both_Players_In_Range", "IDS_To_MainMenu",
-    "IDS_To_QuitRace", "IDS_Player_Wins", "IDS_Profile_Stomp_Title", "IDS_Profile_Stomp_Desc"};
+    "IDS_To_QuitRace", "IDS_Player_Wins", "IDS_Profile_Stomp_Title"};
 static wchar_t *ui_status_text;
 static size_t ui_status_capacity;
 static const char *ui_status_key;
+/* Two more of those strings, the red lines under it (empty unless the cloud sync stopped). */
+#define UI_ALERT_KEY_1 "IDS_Profile_Stomp_Desc"
+#define UI_ALERT_KEY_2 "IDS_Scroll_Directions"
+static wchar_t *ui_alert_text[2];
+static size_t ui_alert_capacity[2];
 
 static size_t ui_wlen(const wchar_t *text) {
     size_t n = 0;
@@ -176,6 +197,33 @@ static size_t ui_wlen(const wchar_t *text) {
         ++n;
     }
     return n;
+}
+
+/* One of those strings' text buffer (kept: never released); 0 when not found. */
+static wchar_t *ui_string_text(const char *key, size_t *capacity) {
+    unsigned id = ((UiLocIdFn)(uintptr_t)(ui_game + UI_LOC_ID_RVA))(key);
+    void *string = 0;
+    ((UiLocMakeFn)(uintptr_t)(ui_game + UI_LOC_MAKE_RVA))(&string, UI_STATUS_CATEGORY, id);
+    if (!string) {
+        return 0;
+    }
+    wchar_t *text = ((UiLocTextFn)ui_slot(string, 0x38))(string);
+    size_t n = ui_wlen(text);
+    if (!n || !memory_is_writable(text, (n + 1) * sizeof(wchar_t))) {
+        return 0;
+    }
+    *capacity = n;
+    return text;
+}
+
+static int ui_alert_find(void) {
+    if (!ui_alert_text[0]) {
+        ui_alert_text[0] = ui_string_text(UI_ALERT_KEY_1, &ui_alert_capacity[0]);
+    }
+    if (!ui_alert_text[1]) {
+        ui_alert_text[1] = ui_string_text(UI_ALERT_KEY_2, &ui_alert_capacity[1]);
+    }
+    return ui_alert_text[0] && ui_alert_text[1];
 }
 
 /* Picks the longest of those strings (its text buffer is kept); 0 when none is found. */
@@ -203,22 +251,42 @@ static int ui_status_find(void) {
 }
 
 /* Writes the current status into that string (padded with NULs to its full length). */
+static void ui_cat(char *out, size_t cap, const char *text) {
+    size_t n = text_length(out);
+    while (*text && n + 1 < cap) {
+        out[n++] = *text++;
+    }
+    out[n] = 0;
+}
+
+/* `utf8` into a kept string buffer, padded with NULs to its full length. */
+static void ui_string_set(wchar_t *buffer, size_t capacity, const char *utf8) {
+    static wchar_t wide[200];
+    if (!buffer) {
+        return;
+    }
+    int got = MultiByteToWideChar(CP_UTF8, 0, utf8, -1, wide, (int)ARRAY_COUNT(wide));
+    size_t n = 0;
+    for (; got > 0 && wide[n] && n < capacity; ++n) {
+        buffer[n] = wide[n];
+    }
+    for (size_t i = n; i <= capacity; ++i) {
+        buffer[i] = 0;
+    }
+}
+
+/* Writes the current status into those strings: the white line, or (the cloud sync stopped:
+   progress rejected) the two red ones. */
 static void ui_status_write(void) {
     static char text[200];
     const char *color;
     if (!ui_status_text || !azimuth_account_banner(text, sizeof(text), &color)) {
         return;
     }
-    /* UTF-8 (the Portuguese line has accents) */
-    static wchar_t wide[200];
-    int got = MultiByteToWideChar(CP_UTF8, 0, text, -1, wide, (int)ARRAY_COUNT(wide));
-    size_t n = 0;
-    for (; got > 0 && wide[n] && n < ui_status_capacity; ++n) {
-        ui_status_text[n] = wide[n];
-    }
-    for (size_t i = n; i <= ui_status_capacity; ++i) {
-        ui_status_text[i] = 0;
-    }
+    int alert = azimuth_cloud_stopped() && ui_alert_text[0] && ui_alert_text[1];
+    ui_string_set(ui_status_text, ui_status_capacity, alert ? "" : text);
+    ui_string_set(ui_alert_text[0], ui_alert_capacity[0], alert ? azimuth_tr8("SUSPECTED INCOMPATIBLE PROGRESS") : "");
+    ui_string_set(ui_alert_text[1], ui_alert_capacity[1], alert ? azimuth_tr8("RESTART YOUR GAME") : "");
 }
 
 static DWORD WINAPI ui_status_thread(void *unused) {
@@ -776,8 +844,20 @@ static void ui_replace(void **out, void *stream) {
             ui_rewind(stream);
             return;
         }
-        /* the live line (a game string rewritten by ui_status_thread), else this text */
+        /* the live line (a game string rewritten by ui_status_thread), else this text; under it
+           the two red alert lines, bound the same way */
+        static char alert1[96], alert2[96];
+        int alerts = 0;
         if (ui_status_find()) {
+            if (ui_alert_find()) {
+                const char *prefix = "{local:Loc " UI_STATUS_CATEGORY ".";
+                alert1[0] = alert2[0] = 0;
+                ui_cat(alert1, sizeof(alert1), prefix);
+                ui_cat(alert1, sizeof(alert1), UI_ALERT_KEY_1 "}");
+                ui_cat(alert2, sizeof(alert2), prefix);
+                ui_cat(alert2, sizeof(alert2), UI_ALERT_KEY_2 "}");
+                alerts = 1;
+            }
             static int started;
             text[0] = 0;
             memory_copy(text, "{local:Loc " UI_STATUS_CATEGORY ".", sizeof("{local:Loc " UI_STATUS_CATEGORY "."));
@@ -800,7 +880,7 @@ static void ui_replace(void **out, void *stream) {
         if (!page->length || !memory_equal(ui_pause_banner, text, text_length(text) + 1)) {
             ui_pause_current ^= 1;
             page = &ui_pause[ui_pause_current];
-            if (!ui_edit_pause(ui_source, UI_PAUSE_SIZE, text, page)) {
+            if (!ui_edit_pause(ui_source, UI_PAUSE_SIZE, text, alerts ? alert1 : 0, alerts ? alert2 : 0, page)) {
                 page->length = 0;
                 ui_pause_failed = 1;
                 log_append("UI: A_PauseMenu.xaml not as expected; no Infinity status line.\r\n");

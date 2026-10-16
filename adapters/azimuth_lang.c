@@ -516,8 +516,12 @@ static const LangText8 lang_texts8[] = {
      "Este mundo não conduz eventos: o host desligou as corridas ou ainda não atualizou o ForzaInfinity. Jogue-os no HORIZON SOLO ou em outro mundo."},
     {"Cloud sync stopped: the server did not accept some of this session's progress. Nothing from now on is saved online. Restart the game to play on from your cloud save.",
      "Sincronização com a nuvem interrompida: o servidor não aceitou parte do progresso desta sessão. Nada a partir de agora é salvo online. Reinicie o jogo para continuar a partir do seu save da nuvem."},
-    {"INFINITY  |  CLOUD SYNC STOPPED: PROGRESS REJECTED  |  RESTART THE GAME",
-     "INFINITY  |  SINCRONIZAÇÃO INTERROMPIDA: PROGRESSO REJEITADO  |  REINICIE O JOGO"},
+    {"INFINITY  |  RESTART YOUR GAME",
+     "INFINITY  |  REINICIE SEU JOGO"},
+    {"SUSPECTED INCOMPATIBLE PROGRESS",
+     "SUSPEITA DE PROGRESSO NÃO COMPATÍVEL"},
+    {"RESTART YOUR GAME",
+     "REINICIE SEU JOGO"},
 };
 
 void azimuth_lang_set_portuguese(int on) {

@@ -33,6 +33,18 @@
 #define EV_SCOREBOARD_SETUP_SLOT 4
 #define EV_SCOREBOARD_SETUP_RVA 0x9307c0u
 #define EV_SCOREBOARD_RVA 0x34d6af0u
+/* The pause flow's WaitForPause (vtable game+0x2d2f6f8, slot 14 = FUN_140964810) opens the pause
+   menu when the system asks (FUN_1409635f0: state 1 or 2 in the set at +0x198 of
+   *(game+0x367a660), which the window events fill, FUN_1412672d0; the pause then clears them).
+   State 1 is read by nothing else. When the cloud sync stops (rejected progress), it is put in
+   once, from this thread (the one that reads and clears it), with the game's own set insert
+   (FUN_140399d40(set, &value)): the game pauses and the pause menu shows why, in red. */
+#define EV_WAIT_FOR_PAUSE_VTABLE_RVA 0x2d2f6f8u
+#define EV_WAIT_FOR_PAUSE_SLOT 14
+#define EV_WAIT_FOR_PAUSE_RVA 0x964810u
+#define EV_SYSTEM_STATES_RVA 0x367a660u
+#define EV_SET_INSERT_RVA 0x399d40u
+#define EV_PAUSE_STATE 1
 
 typedef void (*EvStateFn)(void *);
 typedef void (*EvSetOwnerFn)(void *, const unsigned long long *);
@@ -43,6 +55,9 @@ static unsigned long long ev_previous_owner[2];
 static int ev_have_previous, ev_denied_logged;
 static ULONGLONG ev_entered_at;
 static EvStateFn ev_scoreboard_setup_original;
+static EvStateFn ev_wait_for_pause_original;
+static int ev_paused_for_sync;
+typedef void *(*EvSetInsertFn)(void *, const int *);
 static int ev_scoreboard_logged;
 
 /* An online session (the game's own test in this state: its session object with +0xd0 set and
@@ -115,6 +130,19 @@ static void ev_scoreboard_setup(void *state) {
     ev_scoreboard_setup_original(state);
 }
 
+static void ev_wait_for_pause(void *state) {
+    if (!ev_paused_for_sync && azimuth_cloud_stopped()) {
+        unsigned char *states = 0;
+        ev_paused_for_sync = 1;
+        if (memory_read_pointer(ev_game + EV_SYSTEM_STATES_RVA, (void **)&states) && states) {
+            static const int pause = EV_PAUSE_STATE;
+            ((EvSetInsertFn)(uintptr_t)(ev_game + EV_SET_INSERT_RVA))(states + 0x198, &pause);
+            log_append("EVENTS: cloud sync stopped: the game is paused to say why.\r\n");
+        }
+    }
+    ev_wait_for_pause_original(state);
+}
+
 static int ev_patch_vtable(unsigned vtable_rva, unsigned slot, unsigned expected_rva, void *hook, EvStateFn *original) {
     void **at = (void **)(ev_game + vtable_rva + slot * sizeof(void *));
     void *current = 0;
@@ -151,5 +179,9 @@ void azimuth_apply_events(unsigned char *game_image) {
     if (!ev_patch_vtable(EV_SCOREBOARD_VTABLE_RVA, EV_SCOREBOARD_SETUP_SLOT, EV_SCOREBOARD_SETUP_RVA,
                          (void *)(uintptr_t)ev_scoreboard_setup, &ev_scoreboard_setup_original)) {
         log_append("EVENTS: the scoreboard setup is not where expected; online race times stay off the boards.\r\n");
+    }
+    if (!ev_patch_vtable(EV_WAIT_FOR_PAUSE_VTABLE_RVA, EV_WAIT_FOR_PAUSE_SLOT, EV_WAIT_FOR_PAUSE_RVA,
+                         (void *)(uintptr_t)ev_wait_for_pause, &ev_wait_for_pause_original)) {
+        log_append("EVENTS: the pause flow is not where expected; a stopped cloud sync does not pause the game.\r\n");
     }
 }

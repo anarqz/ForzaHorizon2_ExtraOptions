@@ -46,6 +46,12 @@ const InfinityTile *azimuth_infinity_tiles(void) {
 void azimuth_lang_set_portuguese(int on) {
     (void)on;
 }
+int azimuth_cloud_stopped(void) {
+    return 0;
+}
+const char *azimuth_tr8(const char *english) {
+    return english;
+}
 int azimuth_account_banner(char *out, size_t cap, const char **color) {
     snprintf(out, cap, "INFINITY  |  SEM CONEX\xc3\x83O COM O SERVIDOR");
     *color = "#ff4f4f";
@@ -91,7 +97,9 @@ int main(int argc, char **argv) {
     ok &= page && ui_edit_options(page, n, &ui_options) && spit(argv[1], "options", &ui_options);
     ok &= page && ui_edit_infinity(page, n, &ui_infinity) && spit(argv[1], "infinity", &ui_infinity);
     page = slurp(argv[2], &n);
-    ok &= page && ui_edit_pause(page, n, "{local:Loc KinectSplitscreen.IDS_Profile_Stomp_Desc}", &ui_pause[0]) &&
+    ok &= page && ui_edit_pause(page, n, "{local:Loc KinectSplitscreen.IDS_Kinect_Splitscreen}",
+                                       "{local:Loc KinectSplitscreen.IDS_Profile_Stomp_Desc}",
+                                       "{local:Loc KinectSplitscreen.IDS_Scroll_Directions}", &ui_pause[0]) &&
           spit(argv[2], "pause", &ui_pause[0]);
     page = slurp(argv[3], &n);
     ok &= page && ui_replace_anchors(page, n, ui_screens_edits, ARRAY_COUNT(ui_screens_edits) / 2, &ui_screens) &&
