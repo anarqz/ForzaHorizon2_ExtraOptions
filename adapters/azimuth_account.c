@@ -62,7 +62,7 @@ static wchar_t account_online[4];
 static char account_discriminator[6];
 static wchar_t account_discriminator_wide[6];
 static char account_device[65];
-static wchar_t account_notice[200]; /* shown by the menu, e.g. "logged in elsewhere" */
+static wchar_t account_notice[480]; /* shown by the menu, e.g. "logged in elsewhere" */
 static SleepFn account_sleep;
 
 /* ------------------------------------------------------------------ text */
@@ -404,6 +404,11 @@ static DWORD WINAPI account_thread(void *unused) {
     DWORD status = azimuth_net_call(L"GET", L"/infinity/v1/me", account_token_header(), 0, reply, sizeof(reply));
     if (status == 200 && account_take(reply)) {
         account_active = 1;
+        /* the server's word for the player, in their language (a moderation reset: db/reset.rs) */
+        if (json_string(reply, "notice", text, sizeof(text)) && text[0]) {
+            utf8_to_wide(text, account_notice, ARRAY_COUNT(account_notice));
+            account_log("the server says: ", text);
+        }
         InterlockedExchange(&account_link, 1);
         azimuth_cloud_start(account_directory, account_xuid, account_token, account_file, account_server);
     } else if (status == 401) {
@@ -422,6 +427,13 @@ static DWORD WINAPI account_thread(void *unused) {
     } else if (status == 403) {
         json_string(reply, "error", text, sizeof(text));
         account_log("the server refused this PC's account; playing offline: ", text);
+        char why[16];
+        if (json_string(reply, "why", why, sizeof(why)) && text_equal_ignore_case(why, "cars")) {
+            utf8_to_wide(azimuth_tr8("This game's car database (media\\stripped\\gamedbRC.slt) is not the original one, so "
+                                     "the Infinity server does not take it: only the game's own cars play online. Put the "
+                                     "original file back (or reinstall the game) and restart."),
+                         account_notice, ARRAY_COUNT(account_notice));
+        }
     } else {
         /* server unreachable: keep the stored identity, the token is sent anyway */
         account_active = account_xuid[0] && account_gamertag[0];
@@ -779,6 +791,25 @@ int azimuth_account_friend_change(unsigned long long xuid, int add, wchar_t *mes
     account_xuid_body(xuid, body, sizeof(body));
     DWORD status = azimuth_net_call(L"POST", add ? L"/infinity/v1/friends" : L"/infinity/v1/friends/remove",
                                     account_token_header(), body, reply, sizeof(reply));
+    if (status == 200 && json_string(reply, "message", text, sizeof(text)) && text[0]) {
+        utf8_to_wide(text, message, cap);
+        return 1;
+    }
+    account_error(status, reply, message, cap);
+    return 0;
+}
+
+/* PLAYER ACTIONS > REPORT PLAYER: POST /infinity/v1/report {xuid}; `message` is the server's
+   answer (or the error). Five different players' reports send an account to moderation. */
+int azimuth_account_report(unsigned long long xuid, wchar_t *message, size_t cap) {
+    static char reply[1024], body[64], text[400];
+    if (!account_active || !account_token[0]) {
+        utf8_to_wide(azimuth_tr8("Reporting a player needs your online profile: create one or sign in in Settings > Infinity."),
+                     message, cap);
+        return 0;
+    }
+    account_xuid_body(xuid, body, sizeof(body));
+    DWORD status = azimuth_net_call(L"POST", L"/infinity/v1/report", account_token_header(), body, reply, sizeof(reply));
     if (status == 200 && json_string(reply, "message", text, sizeof(text)) && text[0]) {
         utf8_to_wide(text, message, cap);
         return 1;

@@ -910,6 +910,7 @@ static void menu_click(void *page) {
 #define GAME_OBJECT_FREE_RVA 0x257730u
 #define ACTION_FRIEND 0x40000000
 #define ACTION_WORLD 0x40000001
+#define ACTION_REPORT 0x40000002
 
 static const unsigned char actions_add_bytes[15] = {0x4c, 0x89, 0x44, 0x24, 0x18, 0x48, 0x89, 0x54,
                                                     0x24, 0x10, 0x57, 0x48, 0x83, 0xec, 0x30};
@@ -926,7 +927,7 @@ typedef unsigned long long (*PlayerXuidFn)(void *);
 
 static ActionsAddFn actions_add_original;
 static ActionsSelectedFn actions_selected_original;
-static unsigned long long actions_xuid, actions_world_xuid;
+static unsigned long long actions_xuid, actions_world_xuid, actions_report_xuid;
 
 /* The game's reference count (+0x10); the object goes when it reaches 0. */
 static void game_object_release(void *object) {
@@ -1010,6 +1011,28 @@ static void actions_add(void *page, void **list, void **item) {
         actions_world_xuid = xuid;
         actions_insert(collection, ACTION_WORLD, L"JOIN WORLD");
     }
+    /* any other player with a profile on this server (a leaderboard's, a club's, a friend) */
+    actions_report_xuid = xuid;
+    actions_insert(collection, ACTION_REPORT, L"REPORT PLAYER");
+}
+
+/* REPORT PLAYER: sent once confirmed. */
+static void actions_report_send(void) {
+    static wchar_t message[400];
+    if (!azimuth_account_report(actions_report_xuid, message, ARRAY_COUNT(message))) {
+        menu_retry(L"REPORT PLAYER", message, actions_report_send);
+        return;
+    }
+    menu_info(L"REPORT PLAYER", message);
+}
+
+static void actions_report(void) {
+    static const MenuButton buttons[2] = {{L"REPORT", actions_report_send}, {L"CANCEL", menu_nothing}};
+    menu_popup(L"REPORT PLAYER",
+               L"Report this player to the server's moderation? Use it for cheating: impossible times or scores, "
+               L"modified cars, a garage or credits nobody could have. When five different players report the same "
+               L"account, moderation looks at it; an account found cheating has its progress reset.",
+               buttons, 2);
 }
 
 /* JOIN WORLD: the world the player is in becomes this player's next FREE ROAM ONLINE. */
@@ -1081,11 +1104,16 @@ static void actions_selected(void *page, char flag) {
     }
     int id = current ? *(int *)((unsigned char *)current + 0x68) : 0;
     game_object_release(current);
-    if (id != ACTION_FRIEND && id != ACTION_WORLD) {
+    if (id != ACTION_FRIEND && id != ACTION_WORLD && id != ACTION_REPORT) {
         actions_selected_original(page, flag);
         return;
     }
     menu_page = page;
+    if (id == ACTION_REPORT) {
+        actions_report_xuid = actions_player(page);
+        actions_report();
+        return;
+    }
     if (id == ACTION_WORLD) {
         actions_world_xuid = actions_player(page);
         actions_world();

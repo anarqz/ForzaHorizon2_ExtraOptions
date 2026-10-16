@@ -845,6 +845,8 @@ void azimuth_world_on_request(const wchar_t *method, const wchar_t *url, const u
 static wchar_t world_car_db_path[PATH_CAPACITY];
 static wchar_t world_car_db_header[96];
 static volatile LONG world_car_db_ready;
+/* 0 not started, 1 hashing, 2 done (ready or unreadable): requests wait only while 1. */
+static volatile LONG world_car_db_state;
 static unsigned char world_car_db_digest[32];
 
 #define WORLD_REHASH_MS 30000u
@@ -882,7 +884,8 @@ static DWORD WINAPI world_hash_car_db(void *unused) {
     (void)unused;
     unsigned char digest[32];
     if (!world_digest_car_db(digest)) {
-        log_append("WORLD: the car database could not be read; worlds will not check it.\r\n");
+        InterlockedExchange(&world_car_db_state, 2);
+        log_append("WORLD: the car database could not be read; the server will refuse online play.\r\n");
         return 0;
     }
     memory_copy(world_car_db_digest, digest, sizeof(digest));
@@ -896,6 +899,7 @@ static DWORD WINAPI world_hash_car_db(void *unused) {
     }
     world_car_db_header[n] = 0;
     InterlockedExchange(&world_car_db_ready, 1);
+    InterlockedExchange(&world_car_db_state, 2);
     char line[96];
     WorldText t = {line, 0, sizeof(line)};
     line[0] = 0;
@@ -904,7 +908,7 @@ static DWORD WINAPI world_hash_car_db(void *unused) {
         char pair[3] = {hex[digest[i] >> 4], hex[digest[i] & 15], 0};
         world_add(&t, pair);
     }
-    world_add(&t, "... (worlds only with the same cars).\r\n");
+    world_add(&t, "... (sent to the server: only the game's own cars play online).\r\n");
     log_append(line);
     for (;;) {
         Sleep(WORLD_REHASH_MS);
@@ -918,6 +922,9 @@ static DWORD WINAPI world_hash_car_db(void *unused) {
 /* `executable` is the game's forza_durango_release_final.exe in its Mount folder. */
 void azimuth_world_hash_car_db(const wchar_t *executable) {
     size_t n = 0, slash = 0;
+    if (InterlockedCompareExchange(&world_car_db_state, 1, 0) != 0) {
+        return;
+    }
     while (executable && executable[n] && n + 1 < ARRAY_COUNT(world_car_db_path)) {
         world_car_db_path[n] = executable[n];
         if (executable[n] == L'\\' || executable[n] == L'/') slash = n + 1;
@@ -926,12 +933,23 @@ void azimuth_world_hash_car_db(const wchar_t *executable) {
     world_car_db_path[slash] = 0;
     static const wchar_t rest[] = WORLD_CAR_DB;
     if (slash + ARRAY_COUNT(rest) >= ARRAY_COUNT(world_car_db_path)) {
+        InterlockedExchange(&world_car_db_state, 2);
         return;
     }
     memory_copy(world_car_db_path + slash, rest, sizeof(rest));
     HANDLE thread = CreateThread(0, 0, world_hash_car_db, 0, 0, 0);
     if (thread) {
         CloseHandle(thread);
+    } else {
+        InterlockedExchange(&world_car_db_state, 2);
+    }
+}
+
+/* Waits (at most `ms`) while the car database is being hashed: the server refuses an account's
+   requests without the hash, so the game's first ones wait for it. */
+void azimuth_world_car_db_wait(unsigned ms) {
+    for (unsigned waited = 0; world_car_db_state == 1 && waited < ms; waited += 20) {
+        Sleep(20);
     }
 }
 

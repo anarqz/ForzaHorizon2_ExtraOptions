@@ -770,7 +770,9 @@ static int net_forward(NetRequest *request, HRESULT *error) {
                   !buffer_append_wide(&headers, token) || !buffer_append_wide(&headers, L"\r\n"))) {
         goto done;
     }
-    /* the car database's SHA-256: free roam worlds only join the same cars (azimuth_world.c) */
+    /* the car database's SHA-256: the server only lets the game's own cars play online, and free
+       roam worlds only join the same cars (azimuth_world.c) */
+    azimuth_world_car_db_wait(15000);
     const wchar_t *car_db = azimuth_world_car_db_header();
     if (car_db && (!buffer_append_wide(&headers, car_db) || !buffer_append_wide(&headers, L"\r\n"))) {
         goto done;
@@ -976,6 +978,7 @@ static DWORD net_request(const wchar_t *method, const wchar_t *path, const wchar
        and the car database's SHA-256 (free roam worlds, azimuth_world.c) */
     wchar_t joined[640];
     static const wchar_t lang[] = L"X-Fh2-Lang: pt-BR";
+    azimuth_world_car_db_wait(15000);
     const wchar_t *extras[2] = {azimuth_lang_portuguese() ? lang : 0, azimuth_world_car_db_header()};
     if (extras[0] || extras[1]) {
         size_t n = 0;

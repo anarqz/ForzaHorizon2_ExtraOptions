@@ -1305,7 +1305,8 @@ void azimuth_apply_freeroam(unsigned char *game_image, const wchar_t *directory,
     }
     fr_game = game_image;
     azimuth_world_set_directory(directory);
-    azimuth_world_hash_car_db(executable);
+    /* the car database is hashed from azimuth_apply_network (runtime.c), free roam on or off */
+    (void)executable;
     GetPrivateProfileStringW(L"FreeRoam", L"World", L"", fr_world_override,
                              ARRAY_COUNT(fr_world_override), ini);
     GetPrivateProfileStringW(L"FreeRoam", L"Direct", L"0", value, ARRAY_COUNT(value), ini);

@@ -85,6 +85,8 @@ const wchar_t *azimuth_account_notice(void);
    3 they asked, 0 neither, -1 unknown; and adding / removing them. */
 int azimuth_account_friend_state(unsigned long long xuid);
 int azimuth_account_friend_change(unsigned long long xuid, int add, wchar_t *message, size_t cap);
+/* REPORT PLAYER (azimuth_online_menu.c): 1 sent, 0 not (`message` says why). */
+int azimuth_account_report(unsigned long long xuid, wchar_t *message, size_t cap);
 /* azimuth_lang.c: Infinity's texts in Portuguese (Brazil) when the game runs in it, else in
    English. azimuth_tr / azimuth_tr8 look a text up by its English. */
 void azimuth_lang_set_portuguese(int on);
@@ -119,6 +121,8 @@ void azimuth_world_left(void);
 /* The SHA-256 of the game's car database (X-Fh2-CarDb), hashed on a thread at start. */
 void azimuth_world_hash_car_db(const wchar_t *executable);
 const wchar_t *azimuth_world_car_db_header(void);
+/* Waits while the car database is still being hashed (at most `ms`). */
+void azimuth_world_car_db_wait(unsigned ms);
 /* The world a player is in (1, 0 none, -1 no answer), and choosing it for the next FREE ROAM
    ONLINE (ENTRAR NO MUNDO). */
 int azimuth_world_of(unsigned long long xuid, char *host, size_t host_capacity, int *password, char *why,
