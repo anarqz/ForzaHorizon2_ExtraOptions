@@ -88,8 +88,8 @@ static void ev_decide(void *state) {
             memory_read_pointer(options + 0x70, &pending) && pending) {
             ev_have_previous = 0;
             ((EvSetOwnerFn)(uintptr_t)(ev_game + EV_SET_OWNER_RVA))(options, ev_previous_owner);
-            azimuth_account_set_notice("Online events (races, Road Trip) are not available in free roam yet. "
-                                       "Play them in HORIZON SOLO; free roam with your friends works.");
+            azimuth_account_set_notice("This world does not run events: its host turned races off or has not updated "
+                                       "ForzaInfinity yet. Play them in HORIZON SOLO or in another world.");
             if (!ev_denied_logged) {
                 ev_denied_logged = 1;
                 log_append("EVENTS: an event was entered in free roam online and the relay did not answer, "

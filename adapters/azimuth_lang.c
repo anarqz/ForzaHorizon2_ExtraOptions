@@ -512,6 +512,10 @@ static const LangText8 lang_texts8[] = {
      "Este PC não tem mais o acesso a este perfil. Entre com o perfil e a chave do site dele (mostrada em Configurações > Infinity no PC que está com ele agora)."},
     {"This PC has Infinity profiles on this server that it is not signed in to. Open SWITCH PROFILE to play one again: no site key needed on the PC that created it.",
      "Este PC tem perfis do Infinity neste servidor em que não está conectado. Abra TROCAR PERFIL para jogar com um de novo: no PC que o criou, não precisa da chave do site."},
+    {"This world does not run events: its host turned races off or has not updated ForzaInfinity yet. Play them in HORIZON SOLO or in another world.",
+     "Este mundo não conduz eventos: o host desligou as corridas ou ainda não atualizou o ForzaInfinity. Jogue-os no HORIZON SOLO ou em outro mundo."},
+    {"A profile sync was not sent: its progress grew beyond what play can earn in that time. Your progress keeps syncing as you play.",
+     "Uma sincronização do perfil não foi enviada: o progresso cresceu além do que se ganha jogando nesse tempo. Seu progresso continua sincronizando enquanto você joga."},
 };
 
 void azimuth_lang_set_portuguese(int on) {

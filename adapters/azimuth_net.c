@@ -1128,6 +1128,68 @@ static int net_write_all(SequentialStream *stream, const unsigned char *data, si
     return 1;
 }
 
+/* Whether the request goes to the game's Forza services (gameservices.FH2.forzamotorsport.net
+   and the like). */
+static int net_is_forza_service(const wchar_t *url) {
+    static const wchar_t host[] = L"forzamotorsport.net";
+    for (const wchar_t *s = url; s[0] && s[1] && s[2]; ++s) {
+        if (s[0] == L':' && s[1] == L'/' && s[2] == L'/') {
+            url = s + 3;
+            break;
+        }
+    }
+    for (const wchar_t *p = url; *p && *p != L'/'; ++p) {
+        size_t i = 0;
+        while (host[i] && (p[i] | 32) == host[i]) {
+            ++i;
+        }
+        if (!host[i]) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/* No FH2Online profile on this PC (or Online=0): the game's Forza services are answered here
+   as the server would answer them (503, the game plays offline), and nothing goes to the
+   server. Only the hook's own routes (create a profile, sign in, the server's info) reach it. */
+static int net_answer_without_profile(NetRequest *request) {
+    static volatile LONG logged;
+    static const char body[] = "no FH2Online account";
+    if (!net_is_forza_service(buffer_wide(&request->url)) || azimuth_account_token_wait()) {
+        return 0;
+    }
+    request->status = 503;
+    buffer_free(&request->status_text);
+    buffer_free(&request->response_body);
+    if (!buffer_append_wide(&request->status_text, L"Service Unavailable") ||
+        !buffer_append(&request->response_body, body, sizeof(body) - 1)) {
+        return 0;
+    }
+    if (!InterlockedExchange(&logged, 1)) {
+        log_append("NETWORK: no FH2Online profile: the game's online services stay off here (nothing is sent to "
+                   "the server).\r\n");
+    }
+    return 1;
+}
+
+/* A profile sync beyond what play earns (azimuth_progress.c): not sent, and answered as the
+   server answers UpdateAll (200, bin/xtsw: status 0, code 0, no message, no results). */
+static int net_hold_progress(NetRequest *request) {
+    static const unsigned char empty_reply[12] = {0};
+    if (!azimuth_progress_hold(buffer_wide(&request->request_headers), request->request_body.data,
+                               request->request_body.size)) {
+        return 0;
+    }
+    request->status = 200;
+    buffer_free(&request->status_text);
+    buffer_free(&request->response_headers);
+    buffer_free(&request->response_body);
+    return buffer_append_wide(&request->status_text, L"OK") &&
+           buffer_append_wide(&request->response_headers, L"Content-Type: bin/xtsw\r\n") &&
+           buffer_append(&request->response_body, empty_reply, sizeof(empty_reply));
+}
+
 static DWORD WINAPI net_worker(void *parameter) {
     NetRequest *request = parameter;
     HRESULT error = NET_OFFLINE_ERROR;
@@ -1136,7 +1198,8 @@ static DWORD WINAPI net_worker(void *parameter) {
         azimuth_world_on_request(buffer_wide(&request->method), buffer_wide(&request->url),
                                  request->request_body.data, request->request_body.size);
     }
-    int answered = net_mode == NET_MODE_PROXY && !request->aborted && net_forward(request, &error);
+    int answered = net_mode == NET_MODE_PROXY && !request->aborted &&
+                   (net_answer_without_profile(request) || net_hold_progress(request) || net_forward(request, &error));
     if (request->aborted) {
         answered = 0;
         error = E_ABORT;

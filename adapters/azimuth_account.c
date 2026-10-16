@@ -1363,6 +1363,11 @@ const wchar_t *azimuth_account_token(void) {
     return account_ready && account_active && account_token[0] ? account_token : 0;
 }
 
+const wchar_t *azimuth_account_token_wait(void) {
+    account_wait();
+    return azimuth_account_token();
+}
+
 static void account_apply(const wchar_t *directory) {
     if (!azimuth_net_proxy_enabled() || !(account_server = azimuth_net_server_name())) {
         return;

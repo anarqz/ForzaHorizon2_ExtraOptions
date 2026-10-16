@@ -68,6 +68,13 @@ int azimuth_cloud_upload_offline(const wchar_t *bin, const wchar_t *token, const
 /* azimuth_account.c: the player's FH2Online account on that server. */
 void azimuth_apply_account(const wchar_t *directory);
 const wchar_t *azimuth_account_token(void);
+/* The same once the profile has been read (waits for it at the start, up to 30 s). */
+const wchar_t *azimuth_account_token_wait(void);
+/* azimuth_progress.c: a profile sync (OnlineProfile.UpdateAll) beyond what play earns since the
+   last one sent is held back (1); the totals it reads and the limit check, for the tests. */
+int azimuth_progress_hold(const wchar_t *headers, const void *body, size_t size);
+int azimuth_progress_read(const unsigned char *body, size_t size, unsigned out[4]);
+int azimuth_progress_over(const unsigned base[4], const unsigned now[4], double hours);
 /* The XUID this session plays as online (0 offline). */
 unsigned long long azimuth_account_xuid_value(void);
 /* azimuth_proxy.c (F3): the joining player's UDP proxy between the game and a world on another
