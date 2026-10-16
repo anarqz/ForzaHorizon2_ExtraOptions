@@ -189,40 +189,58 @@ typedef struct {
 
 static void menu_nothing(void);
 
-/* The game's popup (A_MessageBox.xaml) is a list; each item has the button of the controller
-   it answers to (FUN_140db3d00's result: 0 A, 1 B, 2 X, 3 Y; the game's own three-button
-   popup is A, B to cancel, Y). B always backs out: an item that only closes (menu_nothing, or
-   one given 'B') takes B, the others A, then Y, then X; with none, a Back item is added on B
-   (an OK alone stays on A: B closes it anyway). */
+/* The game's popup (A_MessageBox.xaml) is a list, and an item answers to the controller button
+   of its place in it: the 1st A, the 2nd B, the 3rd X, the 4th Y. B always backs out: an item
+   that only closes (menu_nothing, or one given 'B') goes 2nd; the others take their key's place
+   ('A', 'X', 'Y') or, without one, the free places from the 1st. A popup without a way back gets
+   a Back item 2nd (an OK alone stays 1st: B closes it anyway). The places close up (a Y with no
+   X becomes X), so the list never has a hole. */
 #define MENU_POPUP_ITEMS 4
 static int menu_popup_keys(const MenuButton *buttons, int count, MenuButton *items, int *keys) {
-    static const int order[3] = {0, 3, 2};
-    int used[4] = {0}, n = 0, back = -1;
-    for (int i = 0; i < count && n < MENU_POPUP_ITEMS; ++i) {
-        items[n] = buttons[i];
-        keys[n] = buttons[i].key == 'A' ? 0 : buttons[i].key == 'B' ? 1 : buttons[i].key == 'X' ? 2 : buttons[i].key == 'Y' ? 3 : -1;
-        if (keys[n] < 0 && back < 0 && count > 1 && buttons[i].action == menu_nothing) {
-            keys[n] = 1;
+    const MenuButton *slot[MENU_POPUP_ITEMS] = {0};
+    static const MenuButton back = {L"Back", menu_nothing, 'B'};
+    int placed[MENU_POPUP_ITEMS] = {0}, n = 0;
+    /* the ones with a place: B for the way back, A, X, Y as asked */
+    for (int i = 0; i < count && i < MENU_POPUP_ITEMS; ++i) {
+        const MenuButton *b = &buttons[i];
+        int want = b->key == 'B' || (!b->key && count > 1 && b->action == menu_nothing) ? 1
+                   : b->key == 'A'                                                     ? 0
+                   : b->key == 'X'                                                     ? 2
+                   : b->key == 'Y'                                                     ? 3
+                                                                                       : -1;
+        if (want >= 0 && !slot[want]) {
+            slot[want] = b;
+            placed[i] = 1;
         }
-        if (keys[n] >= 0) {
-            used[keys[n]] = 1;
-            back = keys[n] == 1 ? n : back;
-        }
-        ++n;
     }
-    for (int i = 0; i < n; ++i) {
-        for (int k = 0; keys[i] < 0 && k < 3; ++k) {
-            if (!used[order[k]]) {
-                keys[i] = order[k];
-                used[order[k]] = 1;
+    /* the others in the free places, A first */
+    for (int i = 0; i < count && i < MENU_POPUP_ITEMS; ++i) {
+        for (int k = 0; !placed[i] && k < MENU_POPUP_ITEMS; ++k) {
+            if (k != 1 && !slot[k]) {
+                slot[k] = &buttons[i];
+                placed[i] = 1;
             }
         }
     }
-    if (back < 0 && !(n == 1 && items[0].action == menu_nothing) && n < MENU_POPUP_ITEMS) {
-        items[n].label = L"Back";
-        items[n].action = menu_nothing;
-        items[n].key = 'B';
-        keys[n++] = 1;
+    if (!slot[1] && !(count == 1 && buttons[0].action == menu_nothing)) {
+        slot[1] = &back;
+    }
+    /* no holes: an empty A takes the first of X and Y, an empty X the Y */
+    if (!slot[0]) {
+        int from = slot[2] ? 2 : 3;
+        slot[0] = slot[from];
+        slot[from] = 0;
+    }
+    if (!slot[2]) {
+        slot[2] = slot[3];
+        slot[3] = 0;
+    }
+    for (int k = 0; k < MENU_POPUP_ITEMS; ++k) {
+        if (slot[k]) {
+            items[n] = *slot[k];
+            keys[n] = n;
+            ++n;
+        }
     }
     return n;
 }
@@ -629,7 +647,7 @@ static void menu_world_status(void) {
     line_add(L"\n\nSettings (name, password, players, friends only): ");
     menu_line_raw(azimuth_world_config_path());
     line_add(L"\nThey apply the next time you open the world.");
-    static const MenuButton buttons[2] = {{L"OK", menu_nothing, 0}, {L"Close world", menu_world_stop, 'Y'}};
+    static const MenuButton buttons[2] = {{L"OK", menu_nothing, 'A'}, {L"Close world", menu_world_stop, 'X'}};
     menu_popup(L"HOST WORLD", menu_line, buttons, 2);
 }
 
