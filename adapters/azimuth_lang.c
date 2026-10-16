@@ -394,6 +394,8 @@ static const LangText8 lang_texts8[] = {
      "O servidor está ocupado. Tente de novo em instantes."},
     {"This game's car database (media\\stripped\\gamedbRC.slt) is not the original one, so the Infinity server does not take it: only the game's own cars play online. Put the original file back (or reinstall the game) and restart.",
      "O banco de carros deste jogo (media\\stripped\\gamedbRC.slt) não é o original, então o servidor do Infinity não o aceita: só os carros do próprio jogo jogam online. Coloque o arquivo original de volta (ou reinstale o jogo) e reinicie."},
+    {"The online profile's save on this PC differed from the server's, so the server's was put in its place. If the game shows other progress, restart it.",
+     "O save do perfil online neste PC era diferente do save do servidor, então o do servidor foi colocado no lugar. Se o jogo mostrar outro progresso, reinicie-o."},
     {"The server refused the request.",
      "O servidor recusou o pedido."},
     {"The profile ",

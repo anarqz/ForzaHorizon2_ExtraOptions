@@ -89,6 +89,8 @@ int azimuth_account_friend_state(unsigned long long xuid);
 int azimuth_account_friend_change(unsigned long long xuid, int add, wchar_t *message, size_t cap);
 /* REPORT PLAYER (azimuth_online_menu.c): 1 sent, 0 not (`message` says why). */
 int azimuth_account_report(unsigned long long xuid, wchar_t *message, size_t cap);
+/* A notice for the INFINITY screen (English UTF-8; azimuth_cloud.c: the server's save restored). */
+void azimuth_account_set_notice(const char *english);
 /* azimuth_lang.c: Infinity's texts in Portuguese (Brazil) when the game runs in it, else in
    English. azimuth_tr / azimuth_tr8 look a text up by its English. */
 void azimuth_lang_set_portuguese(int on);

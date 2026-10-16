@@ -754,6 +754,9 @@ void azimuth_cloud_start(const wchar_t *bin, const wchar_t *xuid, const wchar_t 
     } else {
         if (local.found && !memory_equal(server, local.commit, 64)) {
             back_up(&local);
+            /* the game may have read the local one already: the player is told to restart (what
+               it would upload from it is measured by the server's save gates anyway) */
+            azimuth_account_set_notice("The online profile's save on this PC differed from the server's, so the server's was put in its place. If the game shows other progress, restart it.");
             log_append("CLOUD: the local save differs from the server's; the server's is the profile's (the local one is kept in saves\\fh2online-backup).\r\n");
         }
         if (download(highest + 1)) {

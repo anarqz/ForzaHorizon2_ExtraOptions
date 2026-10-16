@@ -730,6 +730,14 @@ int azimuth_account_banner(char *out, size_t cap, const char **color) {
     return 1;
 }
 
+/* A notice for the INFINITY screen (English UTF-8, translated), unless one is shown already
+   (the server's, which says more). */
+void azimuth_account_set_notice(const char *english) {
+    if (!account_notice[0]) {
+        utf8_to_wide(azimuth_tr8(english), account_notice, ARRAY_COUNT(account_notice));
+    }
+}
+
 const wchar_t *azimuth_account_notice(void) {
     return account_notice;
 }
