@@ -179,12 +179,58 @@ static void menu_function(MenuStdFunction *f, MenuAction action) {
 
 /* ------------------------------------------------------------- popups */
 
+/* `key` is the controller button the item answers to and shows: 'A', 'B', 'X', 'Y', or 0 for
+   menu_popup to choose (menu_popup_keys). */
 typedef struct {
     const wchar_t *label;
     MenuAction action;
+    char key;
 } MenuButton;
 
-static void menu_popup(const wchar_t *title, const wchar_t *message, const MenuButton *buttons, int count) {
+static void menu_nothing(void);
+
+/* The game's popup (A_MessageBox.xaml) is a list; each item has the button of the controller
+   it answers to (FUN_140db3d00's result: 0 A, 1 B, 2 X, 3 Y; the game's own three-button
+   popup is A, B to cancel, Y). B always backs out: an item that only closes (menu_nothing, or
+   one given 'B') takes B, the others A, then Y, then X; with none, a Back item is added on B
+   (an OK alone stays on A: B closes it anyway). */
+#define MENU_POPUP_ITEMS 4
+static int menu_popup_keys(const MenuButton *buttons, int count, MenuButton *items, int *keys) {
+    static const int order[3] = {0, 3, 2};
+    int used[4] = {0}, n = 0, back = -1;
+    for (int i = 0; i < count && n < MENU_POPUP_ITEMS; ++i) {
+        items[n] = buttons[i];
+        keys[n] = buttons[i].key == 'A' ? 0 : buttons[i].key == 'B' ? 1 : buttons[i].key == 'X' ? 2 : buttons[i].key == 'Y' ? 3 : -1;
+        if (keys[n] < 0 && back < 0 && count > 1 && buttons[i].action == menu_nothing) {
+            keys[n] = 1;
+        }
+        if (keys[n] >= 0) {
+            used[keys[n]] = 1;
+            back = keys[n] == 1 ? n : back;
+        }
+        ++n;
+    }
+    for (int i = 0; i < n; ++i) {
+        for (int k = 0; keys[i] < 0 && k < 3; ++k) {
+            if (!used[order[k]]) {
+                keys[i] = order[k];
+                used[order[k]] = 1;
+            }
+        }
+    }
+    if (back < 0 && !(n == 1 && items[0].action == menu_nothing) && n < MENU_POPUP_ITEMS) {
+        items[n].label = L"Back";
+        items[n].action = menu_nothing;
+        items[n].key = 'B';
+        keys[n++] = 1;
+    }
+    return n;
+}
+
+static void menu_popup(const wchar_t *title, const wchar_t *message, const MenuButton *given, int given_count) {
+    MenuButton buttons[MENU_POPUP_ITEMS];
+    int keys[MENU_POPUP_ITEMS];
+    int count = menu_popup_keys(given, given_count, buttons, keys);
     if (!menu_page) {
         return;
     }
@@ -208,7 +254,7 @@ static void menu_popup(const wchar_t *title, const wchar_t *message, const MenuB
         MenuStdFunction fn = {{0}, 0};
         menu_function(&fn, buttons[i].action);
         if (label) {
-            ((MenuPopupButtonFn)(uintptr_t)(menu_game + MENU_POPUP_BUTTON_RVA))(popup, i, (void **)&label, &fn, i, 1);
+            ((MenuPopupButtonFn)(uintptr_t)(menu_game + MENU_POPUP_BUTTON_RVA))(popup, i, (void **)&label, &fn, keys[i], 1);
             menu_text_release(label);
         }
     }
@@ -220,7 +266,7 @@ static void menu_nothing(void) {
 }
 
 static void menu_info(const wchar_t *title, const wchar_t *message) {
-    static const MenuButton ok[1] = {{L"OK", menu_nothing}};
+    static const MenuButton ok[1] = {{L"OK", menu_nothing, 0}};
     menu_popup(title, message, ok, 1);
 }
 
@@ -317,7 +363,7 @@ static void menu_restart(void) {
 
 /* The UPDATE tile (and, once a session, the first click on INFINITY while there is one). */
 static void menu_update(void) {
-    static const MenuButton restart[2] = {{L"Restart now", menu_restart}, {L"Later", menu_nothing}};
+    static const MenuButton restart[2] = {{L"Restart now", menu_restart, 0}, {L"Later", menu_nothing, 0}};
     switch (azimuth_update_state()) {
     case UPDATE_INSTALLED:
         menu_popup(L"UPDATE INSTALLED", azimuth_update_text(), restart, 2);
@@ -337,7 +383,7 @@ static void menu_update(void) {
 }
 
 static void menu_show_created(void) {
-    static const MenuButton restart[1] = {{L"Restart now", menu_restart}};
+    static const MenuButton restart[1] = {{L"Restart now", menu_restart, 0}};
     line_start();
     line_add(L"Your online profile: ");
     line_add(azimuth_account_gamertag());
@@ -358,7 +404,7 @@ static void menu_add_friend(void);
 
 /* Something went wrong: say what, and offer the step again. */
 static void menu_retry(const wchar_t *title, const wchar_t *error, MenuAction again) {
-    MenuButton buttons[2] = {{L"Try again", again}, {L"Cancel", menu_nothing}};
+    MenuButton buttons[2] = {{L"Try again", again, 0}, {L"Cancel", menu_nothing, 0}};
     line_start();
     line_add(error);
     menu_popup(title, menu_line, buttons, 2);
@@ -390,7 +436,7 @@ static void menu_ask_name(void) {
 static wchar_t menu_login_tag[32];
 
 static void menu_show_logged_in(void) {
-    static const MenuButton restart[1] = {{L"Restart now", menu_restart}};
+    static const MenuButton restart[1] = {{L"Restart now", menu_restart, 0}};
     line_start();
     line_add(L"Signed in as ");
     line_add(azimuth_account_gamertag());
@@ -421,7 +467,7 @@ static void menu_ask_key(void) {
 }
 
 static void menu_login_tag_typed(const wchar_t *tag) {
-    static const MenuButton next[1] = {{L"Enter key", menu_ask_key}};
+    static const MenuButton next[1] = {{L"Enter key", menu_ask_key, 0}};
     size_t n = 0;
     if (!tag[0]) {
         return;
@@ -455,7 +501,7 @@ static void menu_leave(void) {
 }
 
 static void menu_deleted(void) {
-    static const MenuButton restart[1] = {{L"Restart now", menu_restart}};
+    static const MenuButton restart[1] = {{L"Restart now", menu_restart, 0}};
     menu_popup(L"PROFILE DELETED",
                L"Your online profile and everything it had on the server are gone. The game will close and open "
                L"again on your offline profile, which was not touched.\n\nOther profiles saved on this PC stay "
@@ -473,7 +519,7 @@ static void menu_delete(void) {
 }
 
 static void menu_confirm_delete(void) {
-    static const MenuButton buttons[2] = {{L"Delete forever", menu_delete}, {L"Back", menu_nothing}};
+    static const MenuButton buttons[2] = {{L"Delete forever", menu_delete, 0}, {L"Back", menu_nothing, 0}};
     line_start();
     line_add(L"This deletes ");
     line_add(azimuth_account_gamertag());
@@ -483,9 +529,9 @@ static void menu_confirm_delete(void) {
 }
 
 static void menu_confirm_leave(void) {
-    static const MenuButton buttons[3] = {{L"Leave and restart", menu_leave},
-                                          {L"Delete profile", menu_confirm_delete},
-                                          {L"Back", menu_nothing}};
+    static const MenuButton buttons[3] = {{L"Leave and restart", menu_leave, 0},
+                                          {L"Delete profile", menu_confirm_delete, 0},
+                                          {L"Back", menu_nothing, 0}};
     menu_popup(L"LEAVE INFINITY",
                L"Leaving restarts the game on your offline profile. Your online profile stays saved and you can "
                L"come back to it here anytime.\n\nDelete profile removes your online profile from the server for "
@@ -508,7 +554,7 @@ static void menu_new_key(void) {
 
 /* The current key, and a new one only on request. */
 static void menu_show_key(void) {
-    static const MenuButton buttons[2] = {{L"New key", menu_new_key}, {L"Back", menu_nothing}};
+    static const MenuButton buttons[2] = {{L"New key", menu_new_key, 0}, {L"Back", menu_nothing, 0}};
     line_start();
     if (azimuth_account_web_key()[0]) {
         line_add(L"Your site key: ");
@@ -583,7 +629,7 @@ static void menu_world_status(void) {
     line_add(L"\n\nSettings (name, password, players, friends only): ");
     menu_line_raw(azimuth_world_config_path());
     line_add(L"\nThey apply the next time you open the world.");
-    static const MenuButton buttons[2] = {{L"OK", menu_nothing}, {L"Close world", menu_world_stop}};
+    static const MenuButton buttons[2] = {{L"OK", menu_nothing, 0}, {L"Close world", menu_world_stop, 'Y'}};
     menu_popup(L"HOST WORLD", menu_line, buttons, 2);
 }
 
@@ -601,7 +647,7 @@ static void menu_world(void) {
         menu_world_status();
         return;
     }
-    static const MenuButton buttons[2] = {{L"Host", menu_world_open}, {L"Cancel", menu_nothing}};
+    static const MenuButton buttons[2] = {{L"Host", menu_world_open, 0}, {L"Cancel", menu_nothing, 0}};
     menu_popup(L"HOST WORLD",
                L"Your world will be public: anyone who goes to FREE ROAM ONLINE can be sent to it.\n\n"
                L"For a world only your friends join, use the game's private online session instead.",
@@ -682,8 +728,8 @@ static void menu_find_next(void) {
     for (unsigned i = 0; i < m; ++i) text[n + 1 + i] = digits[m - 1 - i];
     text[n + 1 + m] = 0;
     menu_line_raw(text);
-    static const MenuButton buttons[3] = {{L"Enter", menu_find_enter}, {L"Keep looking", menu_find_more},
-                                          {L"Leave", menu_nothing}};
+    static const MenuButton buttons[3] = {{L"Enter", menu_find_enter, 0}, {L"Keep looking", menu_find_more, 0},
+                                          {L"Leave", menu_nothing, 0}};
     menu_popup(friend_world ? L"FIND WORLD" : L"UNKNOWN WORLD", menu_line, buttons, 3);
 }
 
@@ -700,9 +746,9 @@ static void menu_test_connection(void) {
 }
 
 static void menu_more(void) {
-    static const MenuButton buttons[3] = {{L"New site key", menu_new_key},
-                                          {L"Switch profile", menu_switch},
-                                          {L"Leave Infinity", menu_confirm_leave}};
+    static const MenuButton buttons[3] = {{L"New site key", menu_new_key, 0},
+                                          {L"Switch profile", menu_switch, 0},
+                                          {L"Leave Infinity", menu_confirm_leave, 0}};
     menu_popup(L"INFINITY",
                L"The site key signs you in to the server's site and lets you use this profile on another PC. "
                L"A new one makes the previous one stop working.\n\nSwitch profile lists this PC's profiles (up to 3) "
@@ -759,18 +805,15 @@ static void menu_about(void) {
 /* ------------------------------------------------------- SWITCH PROFILE */
 
 /* The Infinity profiles of this PC on this server (azimuth_account_profiles: the INI's and
-   the ones the server says this PC created), each with its site key, in one of the game's
-   popups. Its buttons are the profiles to play (the game restarts on the one chosen) and the
-   options: sign in with a site key, a new profile, delete the one in use. A popup has three
-   buttons at most: with more, the third is More options, which shows the rest. */
-enum { MENU_ITEM_SIGN_IN = 10, MENU_ITEM_NEW, MENU_ITEM_DELETE };
-
+   the ones the server says this PC created), each with its site key, in the game's popup:
+   A chooses another profile (or, with none, signs in with a site key), Y makes a new one, X
+   deletes the one in use, B goes back. Choosing lists the profiles on A, X and Y (and signing
+   in with a key when one is left), B back to the list; the game restarts on the one chosen. */
 static AccountProfile menu_profiles[ACCOUNT_PROFILES_MAX];
 static int menu_profile_count, menu_profile_pick;
-static int menu_items[ACCOUNT_PROFILES_MAX + 3], menu_item_count, menu_item_from;
+static int menu_choices[ACCOUNT_PROFILES_MAX], menu_choice_count;
 
 static void menu_switch(void);
-static void menu_switch_page(void);
 
 static const AccountProfile *menu_profile_current(void) {
     for (int i = 0; i < menu_profile_count; ++i) {
@@ -791,7 +834,7 @@ static void menu_switch_go(void) {
 }
 
 static void menu_switch_pick(int index) {
-    static const MenuButton buttons[2] = {{L"Restart now", menu_switch_go}, {L"Back", menu_switch}};
+    static const MenuButton buttons[2] = {{L"Restart now", menu_switch_go, 'A'}, {L"Back", menu_switch, 'B'}};
     const AccountProfile *pick = &menu_profiles[index], *current = menu_profile_current();
     menu_profile_pick = index;
     line_start();
@@ -809,60 +852,32 @@ static void menu_switch_pick(int index) {
     menu_popup(L"SWITCH PROFILE", menu_line, buttons, 2);
 }
 
-static void menu_item_run(int item) {
-    switch (item) {
-    case MENU_ITEM_SIGN_IN:
-        menu_log_in();
-        break;
-    case MENU_ITEM_NEW:
-        menu_ask_name();
-        break;
-    case MENU_ITEM_DELETE:
-        menu_confirm_delete();
-        break;
-    default:
-        if (item >= 0 && item < menu_profile_count) {
-            menu_switch_pick(item);
-        }
-    }
-}
+static void menu_choice_0(void) { menu_switch_pick(menu_choices[0]); }
+static void menu_choice_1(void) { menu_switch_pick(menu_choices[1]); }
+static void menu_choice_2(void) { menu_switch_pick(menu_choices[2]); }
 
-static void menu_item_0(void) { menu_item_run(menu_items[menu_item_from]); }
-static void menu_item_1(void) { menu_item_run(menu_items[menu_item_from + 1]); }
-static void menu_item_2(void) { menu_item_run(menu_items[menu_item_from + 2]); }
-
-static void menu_switch_more(void) {
-    menu_item_from += 2;
-    menu_switch_page();
-}
-
-/* The list (menu_line, from menu_switch) with the items from menu_item_from on. */
-static void menu_switch_page(void) {
-    static const MenuAction runs[3] = {menu_item_0, menu_item_1, menu_item_2};
-    static wchar_t labels[3][32];
-    MenuButton buttons[3];
-    int left = menu_item_count - menu_item_from, shown = left > 3 ? 2 : left;
-    for (int i = 0; i < shown; ++i) {
-        int item = menu_items[menu_item_from + i];
-        const wchar_t *label = item == MENU_ITEM_SIGN_IN  ? L"Sign in with a site key"
-                               : item == MENU_ITEM_NEW    ? L"New profile"
-                               : item == MENU_ITEM_DELETE ? L"Delete my profile"
-                                                          : menu_profiles[item].gamertag;
-        size_t n = 0;
-        while (label[n] && n + 1 < ARRAY_COUNT(labels[i])) {
-            labels[i][n] = label[n];
-            ++n;
-        }
-        labels[i][n] = 0;
-        buttons[i].label = labels[i];
-        buttons[i].action = runs[i];
+/* The profiles to play (menu_choices), each a button; the list text stays. */
+static void menu_choose(void) {
+    static const MenuAction runs[ACCOUNT_PROFILES_MAX] = {menu_choice_0, menu_choice_1, menu_choice_2};
+    static const char keys[ACCOUNT_PROFILES_MAX] = {'A', 'X', 'Y'};
+    MenuButton buttons[MENU_POPUP_ITEMS];
+    int n = 0;
+    for (; n < menu_choice_count && n < ACCOUNT_PROFILES_MAX; ++n) {
+        buttons[n].label = menu_profiles[menu_choices[n]].gamertag;
+        buttons[n].action = runs[n];
+        buttons[n].key = keys[n];
     }
-    if (left > 3) {
-        buttons[shown].label = L"More options";
-        buttons[shown].action = menu_switch_more;
-        ++shown;
+    if (n < ACCOUNT_PROFILES_MAX) {
+        buttons[n].label = L"Sign in with a site key";
+        buttons[n].action = menu_log_in;
+        buttons[n].key = keys[n];
+        ++n;
     }
-    menu_popup(L"SWITCH PROFILE", menu_line, buttons, shown);
+    buttons[n].label = L"Back";
+    buttons[n].action = menu_switch;
+    buttons[n].key = 'B';
+    ++n;
+    menu_popup(L"CHOOSE PROFILE", menu_line, buttons, n);
 }
 
 static void menu_switch(void) {
@@ -873,6 +888,7 @@ static void menu_switch(void) {
     } else {
         line_add(L"Infinity profiles of this PC (up to 3 per server):\n");
     }
+    menu_choice_count = 0;
     for (int i = 0; i < menu_profile_count; ++i) {
         const AccountProfile *p = &menu_profiles[i];
         line_add(L"\n");
@@ -890,25 +906,25 @@ static void menu_switch(void) {
             line_add(L"(on the PC it is signed in on)");
         }
         line_add(L"\n");
+        if (p->current != 2 && !p->suspended && (p->saved || p->made_here)) {
+            menu_choices[menu_choice_count++] = i;
+        }
     }
     if (menu_profile_count) {
         line_add(L"\nChoose a profile and the game restarts on it. Note your site keys: with the profile's name they sign you in on another PC and on the server's site.");
     }
-    menu_item_count = menu_item_from = 0;
-    for (int i = 0; i < menu_profile_count; ++i) {
-        const AccountProfile *p = &menu_profiles[i];
-        if (p->current != 2 && !p->suspended && (p->saved || p->made_here)) {
-            menu_items[menu_item_count++] = i;
-        }
-    }
-    menu_items[menu_item_count++] = MENU_ITEM_SIGN_IN;
+    MenuButton buttons[MENU_POPUP_ITEMS];
+    int n = 0;
+    buttons[n++] = menu_choice_count ? (MenuButton){L"Choose a profile", menu_choose, 'A'}
+                                     : (MenuButton){L"Sign in with a site key", menu_log_in, 'A'};
     if (menu_profile_count < ACCOUNT_PROFILES_MAX) {
-        menu_items[menu_item_count++] = MENU_ITEM_NEW;
+        buttons[n++] = (MenuButton){L"New profile", menu_ask_name, 'Y'};
     }
     if (azimuth_account_state() >= 1) {
-        menu_items[menu_item_count++] = MENU_ITEM_DELETE;
+        buttons[n++] = (MenuButton){L"Delete my profile", menu_confirm_delete, 'X'};
     }
-    menu_switch_page();
+    buttons[n++] = (MenuButton){L"Back", menu_nothing, 'B'};
+    menu_popup(L"SWITCH PROFILE", menu_line, buttons, n);
 }
 
 /* ------------------------------------------------------- INFINITY screen */
@@ -1001,9 +1017,9 @@ static void menu_click(void *page) {
     menu_page = page;
     switch (azimuth_account_state()) {
     case 0: {
-        static const MenuButton buttons[3] = {{L"Create profile", menu_ask_name},
-                                              {L"Sign in", menu_switch},
-                                              {L"Test connection", menu_test_connection}};
+        static const MenuButton buttons[3] = {{L"Create profile", menu_ask_name, 0},
+                                              {L"Sign in", menu_switch, 0},
+                                              {L"Test connection", menu_test_connection, 0}};
         line_start();
         if (azimuth_account_notice()[0]) {
             line_add(azimuth_account_notice());
@@ -1019,8 +1035,8 @@ static void menu_click(void *page) {
         break;
     }
     case 1: {
-        static const MenuButton buttons[2] = {{L"Join and restart", menu_join},
-                                              {L"Test connection", menu_test_connection}};
+        static const MenuButton buttons[2] = {{L"Join and restart", menu_join, 0},
+                                              {L"Test connection", menu_test_connection, 0}};
         line_start();
         line_add(L"You have the online profile ");
         line_add(azimuth_account_gamertag());
@@ -1030,9 +1046,9 @@ static void menu_click(void *page) {
         break;
     }
     case 2: {
-        static const MenuButton buttons[3] = {{L"Add friend", menu_add_friend},
-                                              {L"Test connection", menu_test_connection},
-                                              {L"More options", menu_more}};
+        static const MenuButton buttons[3] = {{L"Add friend", menu_add_friend, 0},
+                                              {L"Test connection", menu_test_connection, 0},
+                                              {L"More options", menu_more, 0}};
         line_start();
         /* the server's word for the player (a season or moderation reset, a restored save) */
         if (azimuth_account_notice()[0]) {
@@ -1191,7 +1207,7 @@ static void actions_report_send(void) {
 }
 
 static void actions_report(void) {
-    static const MenuButton buttons[2] = {{L"REPORT", actions_report_send}, {L"CANCEL", menu_nothing}};
+    static const MenuButton buttons[2] = {{L"REPORT", actions_report_send, 0}, {L"CANCEL", menu_nothing, 0}};
     menu_popup(L"REPORT PLAYER",
                L"Report this player to the server's moderation? Use it for cheating: impossible times or scores, "
                L"modified cars, a garage or credits nobody could have. When five different players report the same "

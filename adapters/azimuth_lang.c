@@ -377,6 +377,10 @@ static const LangText lang_texts[] = {
      L"\nEscolha um perfil e o jogo reinicia nele. Anote suas chaves do site: com o nome do perfil, elas permitem entrar em outro PC e no site do servidor."},
     {L"Your online profile and everything it had on the server are gone. The game will close and open again on your offline profile, which was not touched.\n\nOther profiles saved on this PC stay in SWITCH PROFILE.",
      L"Seu perfil online e tudo o que ele tinha no servidor foram apagados. O jogo vai fechar e abrir de novo no seu perfil offline, que não foi alterado.\n\nOs outros perfis salvos neste PC continuam em TROCAR PERFIL."},
+    {L"CHOOSE PROFILE",
+     L"ESCOLHER PERFIL"},
+    {L"Choose a profile",
+     L"Escolher perfil"},
 };
 
 static const LangText8 lang_texts8[] = {
