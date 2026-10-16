@@ -107,7 +107,9 @@ const wchar_t *azimuth_account_web_key(void);
 const wchar_t *azimuth_account_discriminator(void);
 const wchar_t *azimuth_account_server(void);
 int azimuth_account_valid_name(const wchar_t *name);
-int azimuth_account_register(const wchar_t *name, wchar_t *message, size_t cap);
+/* `noob`: a Noob profile (the offline save as it is, no progress gates; only meets Noob
+   players), else Hardcore (a new career, every gate). */
+int azimuth_account_register(const wchar_t *name, int noob, wchar_t *message, size_t cap);
 int azimuth_account_delete(wchar_t *message, size_t cap);
 int azimuth_account_new_web_key(wchar_t *message, size_t cap);
 int azimuth_account_add_friend(const wchar_t *gamertag, wchar_t *message, size_t cap);
@@ -115,6 +117,8 @@ void azimuth_account_set_online(int online);
 void azimuth_account_restart(void);
 int azimuth_account_log_in(const wchar_t *gamertag, const wchar_t *web_key, wchar_t *message, size_t cap);
 const wchar_t *azimuth_account_notice(void);
+/* The active profile is Noob (its own save, no progress gates), from the server's word. */
+int azimuth_account_noob(void);
 void azimuth_account_force_notice(const char *english);
 /* azimuth_cloud.c: progress of this session was not accepted (`why`): nothing more is saved
    online (cloud save, profile syncs), the status line says to restart, and the next start loads

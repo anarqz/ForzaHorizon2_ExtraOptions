@@ -408,13 +408,21 @@ static void menu_show_created(void) {
     line_add(L"\nSite key: ");
     line_add(azimuth_account_web_key());
     line_add(L"\n\nUse your profile and this key to sign in to the server's site. The key is kept in "
-             L"Settings > Infinity.\n\nThe game will close and open again on the online profile. It starts a new "
-             L"career with your first car, as for every player: every championship, event, road, barn find and "
-             L"treasure is there to win, with its XP and credits. Your offline save stays as it is.");
+             L"Settings > Infinity.\n\nThe game will close and open again on the online profile.");
+    if (azimuth_account_noob()) {
+        line_add(L" NOOB: it plays on with your offline progress, with no checks on it, and meets only other NOOB "
+                 L"players.");
+    } else {
+        line_add(L" HARDCORE: it starts a new career with your first car, as for every HARDCORE player: every "
+                 L"championship, event, road, barn find and treasure is there to win, with its XP and credits. "
+                 L"Your offline save stays as it is.");
+    }
     menu_popup(L"PROFILE CREATED", menu_line, restart, 1);
 }
 
-/* Create profile: the name; the profile starts from the player's newest offline save. */
+/* Create profile: the mode, then the name; the profile starts from the player's newest offline
+   save (HARDCORE: only its first car, a new career; NOOB: all of it). */
+static int menu_new_noob;
 static void menu_ask_name(void);
 static void menu_ask_key(void);
 static void menu_switch(void);
@@ -433,7 +441,7 @@ static void menu_name_typed(const wchar_t *name) {
     if (!name[0]) {
         return; /* keyboard cancelled */
     }
-    if (!azimuth_account_register(name, error, ARRAY_COUNT(error))) {
+    if (!azimuth_account_register(name, menu_new_noob, error, ARRAY_COUNT(error))) {
         menu_retry(L"CREATE PROFILE", error, menu_ask_name);
         return;
     }
@@ -444,9 +452,33 @@ static void menu_ask_name(void) {
     line_start();
     line_add(L"1 to 20 letters or digits, starting with a letter. It will read Name#");
     line_add(azimuth_account_discriminator());
-    line_add(L" (in the game, up to 15 characters of it). The profile starts a new career with your first car; "
-             L"your offline save stays as it is.");
+    line_add(menu_new_noob ? L" (in the game, up to 15 characters of it). NOOB: the profile plays on with your "
+                             L"offline progress."
+                           : L" (in the game, up to 15 characters of it). HARDCORE: the profile starts a new career "
+                             L"with your first car; your offline save stays as it is.");
     menu_keyboard(L"Online profile name", menu_line, 20, menu_name_typed);
+}
+
+static void menu_new_hardcore(void) {
+    menu_new_noob = 0;
+    menu_ask_name();
+}
+
+static void menu_new_noob_profile(void) {
+    menu_new_noob = 1;
+    menu_ask_name();
+}
+
+/* The profile's mode first: players only meet players of the same mode. */
+static void menu_choose_mode(void) {
+    static const MenuButton buttons[2] = {{L"Hardcore", menu_new_hardcore, 'A'},
+                                          {L"Noob", menu_new_noob_profile, 'X'}};
+    line_start();
+    line_add(L"HARDCORE: a new career with your first car. Progress is checked by the server, and you play "
+             L"with HARDCORE players only.\n\nNOOB: your offline progress comes with you, as it is, with no "
+             L"checks. You play with NOOB players only.\n\nA HARDCORE profile can become NOOB later; a NOOB one "
+             L"cannot become HARDCORE.");
+    menu_popup(L"PROFILE TYPE", menu_line, buttons, 2);
 }
 
 /* Entrar com perfil: Name#12345, then the site key (a popup in between: a keyboard is not
@@ -936,7 +968,7 @@ static void menu_switch(void) {
     buttons[n++] = menu_choice_count ? (MenuButton){L"Choose a profile", menu_choose, 'A'}
                                      : (MenuButton){L"Sign in with a site key", menu_log_in, 'A'};
     if (menu_profile_count < ACCOUNT_PROFILES_MAX) {
-        buttons[n++] = (MenuButton){L"New profile", menu_ask_name, 'Y'};
+        buttons[n++] = (MenuButton){L"New profile", menu_choose_mode, 'Y'};
     }
     if (azimuth_account_state() >= 1) {
         buttons[n++] = (MenuButton){L"Delete my profile", menu_confirm_delete, 'X'};
@@ -1035,7 +1067,7 @@ static void menu_click(void *page) {
     menu_page = page;
     switch (azimuth_account_state()) {
     case 0: {
-        static const MenuButton buttons[3] = {{L"Create profile", menu_ask_name, 0},
+        static const MenuButton buttons[3] = {{L"Create profile", menu_choose_mode, 0},
                                               {L"Sign in", menu_switch, 0},
                                               {L"Test connection", menu_test_connection, 0}};
         line_start();

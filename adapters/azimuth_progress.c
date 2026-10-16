@@ -128,6 +128,10 @@ int azimuth_progress_hold(const wchar_t *headers, const void *body, size_t size)
     if (azimuth_cloud_stopped()) {
         return 1;
     }
+    /* a Noob profile has no progress gates (its own save, as it is) */
+    if (azimuth_account_noob()) {
+        return 0;
+    }
     if (!azimuth_progress_read(body, size, now)) {
         return 0;
     }

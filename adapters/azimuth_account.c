@@ -688,6 +688,14 @@ static int account_patch_slot(unsigned slot_rva, unsigned target_rva, AccountGet
 /* ------------------------------------------------------------ server calls */
 
 /* Takes xuid/gamertag (and token, web key when present) from a server reply. */
+/* The active profile's mode, from the server (/me, sign-in): Noob profiles have no progress
+   gates (server/src/db/accounts.rs MODE_NOOB). */
+static volatile LONG account_noob;
+
+int azimuth_account_noob(void) {
+    return account_noob != 0;
+}
+
 static int account_take(const char *reply) {
     char value[96];
     if (!json_string(reply, "xuid", value, sizeof(value)) || !value[0]) {
@@ -703,6 +711,9 @@ static int account_take(const char *reply) {
     }
     if (json_string(reply, "webKey", value, sizeof(value)) && value[0]) {
         utf8_to_wide(value, account_web_key, ARRAY_COUNT(account_web_key));
+    }
+    if (json_string(reply, "mode", value, sizeof(value))) {
+        InterlockedExchange(&account_noob, text_equal_ignore_case(value, "noob"));
     }
     size_t length = text_length(reply);
     if (text_find(reply, length, "\"expansions\"")) {
@@ -839,7 +850,7 @@ const wchar_t *azimuth_account_server(void) {
    (azimuth_cloud_upload_offline). If that fails the new account is deleted again, so no empty
    profile is left. On success the account is kept with Online=1, so the next start plays as
    it; the profile that was in use waits in its own section (SWITCH PROFILE). */
-int azimuth_account_register(const wchar_t *name, wchar_t *message, size_t cap) {
+int azimuth_account_register(const wchar_t *name, int noob, wchar_t *message, size_t cap) {
     static char reply[2048], body[256];
     static AccountRecord before;
     char ascii[24];
@@ -855,7 +866,7 @@ int azimuth_account_register(const wchar_t *name, wchar_t *message, size_t cap) 
     text_add(body, sizeof(body), account_discriminator);
     text_add(body, sizeof(body), "\",\"device\":\"");
     text_add(body, sizeof(body), account_device);
-    text_add(body, sizeof(body), "\"}");
+    text_add(body, sizeof(body), noob ? "\",\"mode\":\"noob\"}" : "\",\"mode\":\"hardcore\"}");
     record_read(account_server, &before);
     DWORD status = azimuth_net_call(L"POST", L"/infinity/v1/register", 0, body, reply, sizeof(reply));
     if (status != 200 || !account_take(reply) || !account_token[0]) {
