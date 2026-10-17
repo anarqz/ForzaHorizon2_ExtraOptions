@@ -1,6 +1,13 @@
 # Forza Horizon 2 - Extra Options
 A quality-of-life mod for the Xbox One version of Forza Horizon 2 that adds several tweaks to the game.
 
+> **ForzaInfinity.** This `fh2online` branch is the hook of [ForzaInfinity](https://github.com/anarqz/ForzaInfinity),
+> which brings Forza Horizon 2's online services back on **Azimuth 0.9.10** (recommended) or **0.9.9**:
+> online free roam and races, friends, car clubs, rivals and ghosts, leaderboards, drivatars, the
+> storefront and a cloud save, with HARDCORE and NOOB profiles. It keeps every Extra Options feature
+> below. Players install it from the [ForzaInfinity releases](https://github.com/anarqz/ForzaInfinity/releases/latest),
+> not from this repository; how it works is in `adapters/` and [BUILD.md](BUILD.md).
+
 # Features
  - Intro Skip.
  - Change Car Anywhere.
