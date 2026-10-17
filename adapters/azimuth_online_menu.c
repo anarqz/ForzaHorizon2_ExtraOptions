@@ -1033,7 +1033,7 @@ const InfinityTile *azimuth_infinity_tiles(void) {
         menu_set_tile(4, "ABOUT", "Icons/TiledMenus/Options.png", 0, menu_about);
     } else {
         menu_set_tile(0, "PROFILE", "Icons/TiledMenus/Autoshow.png", 0, menu_profile);
-        menu_set_tile(1, "CREATE PROFILE", "PauseMenuTileBackgrounds/MyRivals.png", 1, menu_ask_name);
+        menu_set_tile(1, "CREATE PROFILE", "PauseMenuTileBackgrounds/MyRivals.png", 1, menu_choose_mode);
         menu_set_tile(2, azimuth_account_saved_profiles() ? "SWITCH PROFILE" : "SIGN IN",
                       "PauseMenuTileBackgrounds/OnlineRoadtrip.png", 1, menu_switch);
         menu_set_tile(3, "TEST CONNECTION", "Icons/TiledMenus/Options.png", 0, menu_test_connection);
