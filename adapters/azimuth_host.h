@@ -124,6 +124,8 @@ void azimuth_account_force_notice(const char *english);
    online (cloud save, profile syncs), the status line says to restart, and the next start loads
    the cloud save. The game is never closed for it. */
 void azimuth_cloud_stop(const char *why);
+/* azimuth_ui.c: rewrites the pause menu's status lines now. */
+void azimuth_ui_status_refresh(void);
 int azimuth_cloud_stopped(void);
 /* SWITCH PROFILE: the Infinity profiles of this PC on this server (at most
    ACCOUNT_PROFILES_MAX, the one in use first), from FH2Online_Accounts.ini and, with

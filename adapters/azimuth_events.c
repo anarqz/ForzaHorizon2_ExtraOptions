@@ -131,6 +131,7 @@ static void ev_scoreboard_setup(void *state) {
 static void ev_wait_for_pause(void *state) {
     if (!ev_paused_for_sync && azimuth_cloud_stopped()) {
         ev_paused_for_sync = 1;
+        azimuth_ui_status_refresh(); /* the red lines before the menu shows, not 5 s later */
         ((EvTakeTransitionFn)(uintptr_t)(ev_game + EV_TAKE_TRANSITION_RVA))(state, (unsigned char *)state + EV_ON_PAUSE);
         log_append("EVENTS: cloud sync stopped: the game is paused to say why.\r\n");
         return;

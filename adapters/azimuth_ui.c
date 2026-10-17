@@ -280,15 +280,37 @@ static void ui_string_set(wchar_t *buffer, size_t capacity, const char *utf8) {
    progress rejected) the two red ones. */
 static void ui_status_write(void) {
     static char text[200];
+    static volatile LONG busy;
     const char *color;
-    if (!ui_status_text || !azimuth_account_banner(text, sizeof(text), &color)) {
+    /* the live thread and the pause flow both write: one at a time (the other's turn comes) */
+    if (!ui_status_text || InterlockedExchange(&busy, 1)) {
+        return;
+    }
+    if (!azimuth_account_banner(text, sizeof(text), &color)) {
+        InterlockedExchange(&busy, 0);
         return;
     }
     int alert = azimuth_cloud_stopped() && ui_alert_text[0] && ui_alert_text[1];
     ui_string_set(ui_status_text, ui_status_capacity, alert ? "" : text);
-    /* a space, not nothing, while they are off: an empty line may not take a later text */
-    ui_string_set(ui_alert_text[0], ui_alert_capacity[0], alert ? azimuth_tr8("SUSPECTED INCOMPATIBLE PROGRESS") : " ");
-    ui_string_set(ui_alert_text[1], ui_alert_capacity[1], alert ? azimuth_tr8("RESTART YOUR GAME") : " ");
+    /* While off they hold 40 no-break spaces, not nothing: the game lays a text block out once,
+       with as many characters as it had then, and later draws at most that many (the white line
+       built with 40 characters cut a longer text at the 40th; red lines built with one space
+       showed one letter). */
+    static char blank[40 * 2 + 1];
+    if (!blank[0]) {
+        for (int i = 0; i < 40; ++i) {
+            blank[2 * i] = (char)0xC2;
+            blank[2 * i + 1] = (char)0xA0;
+        }
+    }
+    ui_string_set(ui_alert_text[0], ui_alert_capacity[0], alert ? azimuth_tr8("SUSPECTED INCOMPATIBLE PROGRESS") : blank);
+    ui_string_set(ui_alert_text[1], ui_alert_capacity[1], alert ? azimuth_tr8("RESTART YOUR GAME") : blank);
+    InterlockedExchange(&busy, 0);
+}
+
+/* The status lines now (the cloud sync just stopped: before the game pauses to show it). */
+void azimuth_ui_status_refresh(void) {
+    ui_status_write();
 }
 
 static DWORD WINAPI ui_status_thread(void *unused) {
