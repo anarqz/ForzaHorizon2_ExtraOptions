@@ -33,18 +33,16 @@
 #define EV_SCOREBOARD_SETUP_SLOT 4
 #define EV_SCOREBOARD_SETUP_RVA 0x9307c0u
 #define EV_SCOREBOARD_RVA 0x34d6af0u
-/* The pause flow's WaitForPause (vtable game+0x2d2f6f8, slot 14 = FUN_140964810) opens the pause
-   menu when the system asks (FUN_1409635f0: state 1 or 2 in the set at +0x198 of
-   *(game+0x367a660), which the window events fill, FUN_1412672d0; the pause then clears them).
-   State 1 is read by nothing else. When the cloud sync stops (rejected progress), it is put in
-   once, from this thread (the one that reads and clears it), with the game's own set insert
-   (FUN_140399d40(set, &value)): the game pauses and the pause menu shows why, in red. */
+/* The pause flow's WaitForPause (vtable game+0x2d2f6f8, slot 14 = FUN_140964810) takes its
+   onPause transition (the state's first, at +0x28) with FUN_141925260(state, transition), which
+   sets this thread's chosen transition; it does so itself when the window is not active. When
+   the cloud sync stops (rejected progress) it is taken once the same way: the game pauses and
+   the pause menu shows why, in red. */
 #define EV_WAIT_FOR_PAUSE_VTABLE_RVA 0x2d2f6f8u
 #define EV_WAIT_FOR_PAUSE_SLOT 14
 #define EV_WAIT_FOR_PAUSE_RVA 0x964810u
-#define EV_SYSTEM_STATES_RVA 0x367a660u
-#define EV_SET_INSERT_RVA 0x399d40u
-#define EV_PAUSE_STATE 1
+#define EV_TAKE_TRANSITION_RVA 0x1925260u
+#define EV_ON_PAUSE 0x28u
 
 typedef void (*EvStateFn)(void *);
 typedef void (*EvSetOwnerFn)(void *, const unsigned long long *);
@@ -57,7 +55,7 @@ static ULONGLONG ev_entered_at;
 static EvStateFn ev_scoreboard_setup_original;
 static EvStateFn ev_wait_for_pause_original;
 static int ev_paused_for_sync;
-typedef void *(*EvSetInsertFn)(void *, const int *);
+typedef void (*EvTakeTransitionFn)(void *, void *);
 static int ev_scoreboard_logged;
 
 /* An online session (the game's own test in this state: its session object with +0xd0 set and
@@ -132,13 +130,10 @@ static void ev_scoreboard_setup(void *state) {
 
 static void ev_wait_for_pause(void *state) {
     if (!ev_paused_for_sync && azimuth_cloud_stopped()) {
-        unsigned char *states = 0;
         ev_paused_for_sync = 1;
-        if (memory_read_pointer(ev_game + EV_SYSTEM_STATES_RVA, (void **)&states) && states) {
-            static const int pause = EV_PAUSE_STATE;
-            ((EvSetInsertFn)(uintptr_t)(ev_game + EV_SET_INSERT_RVA))(states + 0x198, &pause);
-            log_append("EVENTS: cloud sync stopped: the game is paused to say why.\r\n");
-        }
+        ((EvTakeTransitionFn)(uintptr_t)(ev_game + EV_TAKE_TRANSITION_RVA))(state, (unsigned char *)state + EV_ON_PAUSE);
+        log_append("EVENTS: cloud sync stopped: the game is paused to say why.\r\n");
+        return;
     }
     ev_wait_for_pause_original(state);
 }

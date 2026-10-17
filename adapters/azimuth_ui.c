@@ -285,8 +285,9 @@ static void ui_status_write(void) {
     }
     int alert = azimuth_cloud_stopped() && ui_alert_text[0] && ui_alert_text[1];
     ui_string_set(ui_status_text, ui_status_capacity, alert ? "" : text);
-    ui_string_set(ui_alert_text[0], ui_alert_capacity[0], alert ? azimuth_tr8("SUSPECTED INCOMPATIBLE PROGRESS") : "");
-    ui_string_set(ui_alert_text[1], ui_alert_capacity[1], alert ? azimuth_tr8("RESTART YOUR GAME") : "");
+    /* a space, not nothing, while they are off: an empty line may not take a later text */
+    ui_string_set(ui_alert_text[0], ui_alert_capacity[0], alert ? azimuth_tr8("SUSPECTED INCOMPATIBLE PROGRESS") : " ");
+    ui_string_set(ui_alert_text[1], ui_alert_capacity[1], alert ? azimuth_tr8("RESTART YOUR GAME") : " ");
 }
 
 static DWORD WINAPI ui_status_thread(void *unused) {
@@ -857,6 +858,8 @@ static void ui_replace(void **out, void *stream) {
                 ui_cat(alert2, sizeof(alert2), prefix);
                 ui_cat(alert2, sizeof(alert2), UI_ALERT_KEY_2 "}");
                 alerts = 1;
+            } else {
+                log_append("UI: the alert strings were not found; no red lines on the pause menu.\r\n");
             }
             static int started;
             text[0] = 0;
@@ -892,7 +895,8 @@ static void ui_replace(void **out, void *stream) {
         if (!ui_serve(out, stream, page)) {
             ui_rewind(stream);
         } else if (InterlockedIncrement(&ui_logged_pause) <= 3) {
-            log_append("UI: pause menu read with the Infinity status line.\r\n");
+            log_append(alerts ? "UI: pause menu read with the Infinity status line and its red alert lines.\r\n"
+                              : "UI: pause menu read with the Infinity status line.\r\n");
         }
     }
 }
