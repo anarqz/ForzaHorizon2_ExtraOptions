@@ -15,9 +15,6 @@ const SettingDefinition setting_definitions[] = {
     SETTING("Frontend", "EnableSocial", enable_social, SETTING_BOOLEAN),
     SETTING("Frontend", "EnableClubs", enable_clubs, SETTING_BOOLEAN),
     SETTING("Frontend", "EnableRivals", enable_rivals, SETTING_BOOLEAN),
-    SETTING("Livery", "Enable4K", enable_4k_liveries, SETTING_BOOLEAN),
-    SETTING("Livery", "IntermediateMSAA", livery_msaa, SETTING_MSAA),
-    SETTING("Livery", "ExtraSupersampling", livery_supersampling, SETTING_BOOLEAN),
     SETTING("Frontend", "GetInCarFromPauseMenu", garage_from_pause, SETTING_BOOLEAN),
     SETTING("Content", "UnlockStormIslandCars", unlock_storm_island_cars, SETTING_BOOLEAN),
     SETTING("Content", "UnlockTreasureMap", unlock_treasure_map, SETTING_BOOLEAN),
@@ -31,6 +28,9 @@ const SettingDefinition setting_definitions[] = {
 };
 
 static const SettingDefinition legacy_settings[] = {
+    SETTING("Livery", "Enable4K", enable_4k_liveries, SETTING_BOOLEAN),
+    SETTING("Livery", "IntermediateMSAA", livery_msaa, SETTING_MSAA),
+    SETTING("Livery", "ExtraSupersampling", livery_supersampling, SETTING_BOOLEAN),
     SETTING("Frontend", "SnapToRoadOnCarChange", snap_car_to_road, SETTING_BOOLEAN),
     SETTING("Frontend", "SkipCarMeetOnStartup", skip_car_meet_on_startup, SETTING_BOOLEAN),
     SETTING("Frontend", "SpawnAtFestival", spawn_at_festival, SETTING_BOOLEAN),
@@ -55,8 +55,8 @@ void settings_defaults(ModOptions *options) {
         .offline_vip = 1,
         .skip_intro = 1,
         .enable_marketplace = 1,
-        .enable_4k_liveries = 1,
-        .livery_msaa = 4,
+        .enable_4k_liveries = 0,
+        .livery_msaa = 2,
         .livery_supersampling = 0,
         .garage_from_pause = 1,
         .snap_car_to_road = 1,
@@ -68,7 +68,7 @@ void settings_defaults(ModOptions *options) {
         .autodrive = 0,
         .autodrive_cinematic = 1,
         .disable_azimuth_save_checksums = 1,
-        .smooth_sun_shadows = 0,
+        .smooth_sun_shadows = -1,
         .skip_ineligible_car_dialogue = 0,
         .minimap_follows_camera = 1,
         .media_overrides = 0,
@@ -79,7 +79,7 @@ void settings_defaults(ModOptions *options) {
         .enable_social = 1,
         .enable_clubs = 1,
         .enable_rivals = 1,
-        .photo_mode_samples = 256,
+        .photo_mode_samples = 0,
     };
 }
 
@@ -102,9 +102,10 @@ static char *trim_whitespace(char *text) {
 
 static int known_section(const char *name) {
     if (text_equal_ignore_case(name, "Camera") || text_equal_ignore_case(name, "Graphics") ||
-        text_equal_ignore_case(name, "HUD") || text_equal_ignore_case(name, "General") ||
-        text_equal_ignore_case(name, "Language") || text_equal_ignore_case(name, "Network") ||
-        text_equal_ignore_case(name, "Account") || text_equal_ignore_case(name, "FreeRoam")) {
+        text_equal_ignore_case(name, "Livery") || text_equal_ignore_case(name, "HUD") ||
+        text_equal_ignore_case(name, "General") || text_equal_ignore_case(name, "Language") ||
+        text_equal_ignore_case(name, "Network") || text_equal_ignore_case(name, "Account") ||
+        text_equal_ignore_case(name, "FreeRoam")) {
         return 1;
     }
     for (size_t index = 0; index < setting_count; ++index) {

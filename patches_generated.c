@@ -73,6 +73,14 @@ static const unsigned char mainland_boot_skip_car_meet_bytes_0[] = {0x74, 0x18};
 static const unsigned char mainland_boot_skip_car_meet_bytes_1[] = {0xeb, 0x18};
 static const unsigned char *const mainland_boot_skip_car_meet_accepted[] = {
     mainland_boot_skip_car_meet_bytes_0, mainland_boot_skip_car_meet_bytes_1};
+static const unsigned char blinker_radio_left_query_bytes_0[] = {0xe8, 0xf3, 0xd7, 0x70, 0x00};
+static const unsigned char blinker_radio_left_query_bytes_1[] = {0xe8, 0xa7, 0x00, 0x00, 0x00};
+static const unsigned char *const blinker_radio_left_query_accepted[] = {
+    blinker_radio_left_query_bytes_0, blinker_radio_left_query_bytes_1};
+static const unsigned char blinker_radio_right_query_bytes_0[] = {0xe8, 0xc3, 0xd7, 0x70, 0x00};
+static const unsigned char blinker_radio_right_query_bytes_1[] = {0xe8, 0x77, 0x00, 0x00, 0x00};
+static const unsigned char *const blinker_radio_right_query_accepted[] = {
+    blinker_radio_right_query_bytes_0, blinker_radio_right_query_bytes_1};
 static const unsigned char ownership_predicate_bytes_0[] = {0x40, 0x0f, 0xb6, 0xc7};
 static const unsigned char ownership_predicate_bytes_1[] = {0x33, 0xc0, 0xb0, 0x01};
 static const unsigned char *const ownership_predicate_accepted[] = {ownership_predicate_bytes_0,
@@ -255,6 +263,18 @@ static const unsigned char clubs_group_enabled_ddbcd8_bytes_1[] = {0x45, 0x33, 0
                                                                    0x90, 0x90, 0x90};
 static const unsigned char *const clubs_group_enabled_ddbcd8_accepted[] = {
     clubs_group_enabled_ddbcd8_bytes_0, clubs_group_enabled_ddbcd8_bytes_1};
+static const unsigned char aero_front_tuning_unlocked_bytes_0[] = {0xe8, 0x10, 0xcf, 0x4a, 0xff};
+static const unsigned char aero_front_tuning_unlocked_bytes_1[] = {0xb0, 0x01, 0x90, 0x90, 0x90};
+static const unsigned char *const aero_front_tuning_unlocked_accepted[] = {
+    aero_front_tuning_unlocked_bytes_0, aero_front_tuning_unlocked_bytes_1};
+static const unsigned char aero_rear_tuning_unlocked_bytes_0[] = {0xe8, 0xf4, 0xce, 0x4a, 0xff};
+static const unsigned char aero_rear_tuning_unlocked_bytes_1[] = {0xb0, 0x01, 0x90, 0x90, 0x90};
+static const unsigned char *const aero_rear_tuning_unlocked_accepted[] = {
+    aero_rear_tuning_unlocked_bytes_0, aero_rear_tuning_unlocked_bytes_1};
+static const unsigned char stock_rim_localized_name_call_bytes_0[] = {0xe8, 0x6d, 0xb7, 0x01, 0x00};
+static const unsigned char stock_rim_localized_name_call_bytes_1[] = {0xe8, 0x51, 0x3c, 0xff, 0xff};
+static const unsigned char *const stock_rim_localized_name_call_accepted[] = {
+    stock_rim_localized_name_call_bytes_0, stock_rim_localized_name_call_bytes_1};
 static const unsigned char all_rims_categories_query_bytes_0[] = {0xe8, 0xcc, 0xdc,
                                                                   0x53, 0x00, 0x90};
 static const unsigned char all_rims_categories_query_bytes_1[] = {0xff, 0x15, 0xb3,
@@ -279,6 +299,14 @@ static const unsigned char drift_camera_chase_spring_call_bytes_1[] = {0xe8, 0xf
                                                                        0xff};
 static const unsigned char *const drift_camera_chase_spring_call_accepted[] = {
     drift_camera_chase_spring_call_bytes_0, drift_camera_chase_spring_call_bytes_1};
+static const unsigned char front_aero_physics_ranges_bytes_0[] = {0xe8, 0x06, 0x9c, 0x00, 0x00};
+static const unsigned char front_aero_physics_ranges_bytes_1[] = {0xe8, 0xfa, 0x9b, 0x00, 0x00};
+static const unsigned char *const front_aero_physics_ranges_accepted[] = {
+    front_aero_physics_ranges_bytes_0, front_aero_physics_ranges_bytes_1};
+static const unsigned char rear_aero_physics_ranges_bytes_0[] = {0xe8, 0x8b, 0x9b, 0x00, 0x00};
+static const unsigned char rear_aero_physics_ranges_bytes_1[] = {0xe8, 0xaf, 0x99, 0x00, 0x00};
+static const unsigned char *const rear_aero_physics_ranges_accepted[] = {
+    rear_aero_physics_ranges_bytes_0, rear_aero_physics_ranges_bytes_1};
 static const unsigned char sun_shadow_all_cascades_per_frame_bytes_0[] = {0x41, 0x8b, 0x86, 0xbc,
                                                                           0x21, 0x00, 0x00};
 static const unsigned char sun_shadow_all_cascades_per_frame_bytes_1[] = {0xb8, 0x04, 0x00, 0x00,
@@ -443,6 +471,12 @@ const PatchDefinition fixed_patches[FIXED_PATCH_COUNT] = {
     {0x87ac66, 0x87a266, 2, GROUP_BOOT_CAR_MEET, "mainland_boot_skip_car_meet",
      mainland_boot_skip_car_meet_bytes_0, mainland_boot_skip_car_meet_bytes_1,
      mainland_boot_skip_car_meet_bytes_1, mainland_boot_skip_car_meet_accepted, 2},
+    {0x964d08, 0x964308, 5, GROUP_VEHICLE_CONTROLS, "blinker_radio_left_query",
+     blinker_radio_left_query_bytes_0, blinker_radio_left_query_bytes_1,
+     blinker_radio_left_query_bytes_1, blinker_radio_left_query_accepted, 2},
+    {0x964d38, 0x964338, 5, GROUP_VEHICLE_CONTROLS, "blinker_radio_right_query",
+     blinker_radio_right_query_bytes_0, blinker_radio_right_query_bytes_1,
+     blinker_radio_right_query_bytes_1, blinker_radio_right_query_accepted, 2},
     {0x9be8bb, 0x9bdebb, 4, GROUP_DLC, "ownership_predicate", ownership_predicate_bytes_0,
      ownership_predicate_bytes_1, ownership_predicate_bytes_1, ownership_predicate_accepted, 2},
     {0x9bec6b, 0x9be26b, 4, GROUP_DLC, "active_entitlement_predicate",
@@ -546,6 +580,15 @@ const PatchDefinition fixed_patches[FIXED_PATCH_COUNT] = {
     {0xddbcd8, 0xddb2d8, 6, GROUP_CLUBS, "clubs_group_enabled_ddbcd8",
      clubs_group_enabled_ddbcd8_bytes_0, clubs_group_enabled_ddbcd8_bytes_1,
      clubs_group_enabled_ddbcd8_bytes_1, clubs_group_enabled_ddbcd8_accepted, 2},
+    {0xe9ab3b, 0xe9a13b, 5, GROUP_AERO_TUNING, "aero_front_tuning_unlocked",
+     aero_front_tuning_unlocked_bytes_0, aero_front_tuning_unlocked_bytes_1,
+     aero_front_tuning_unlocked_bytes_1, aero_front_tuning_unlocked_accepted, 2},
+    {0xe9aba7, 0xe9a1a7, 5, GROUP_AERO_TUNING, "aero_rear_tuning_unlocked",
+     aero_rear_tuning_unlocked_bytes_0, aero_rear_tuning_unlocked_bytes_1,
+     aero_rear_tuning_unlocked_bytes_1, aero_rear_tuning_unlocked_accepted, 2},
+    {0xebc61e, 0xebbc1e, 5, GROUP_RIMS, "stock_rim_localized_name_call",
+     stock_rim_localized_name_call_bytes_0, stock_rim_localized_name_call_bytes_1,
+     stock_rim_localized_name_call_bytes_1, stock_rim_localized_name_call_accepted, 2},
     {0xece71f, 0xecdd1f, 6, GROUP_RIMS, "all_rims_categories_query",
      all_rims_categories_query_bytes_0, all_rims_categories_query_bytes_1,
      all_rims_categories_query_bytes_1, all_rims_categories_query_accepted, 2},
@@ -560,6 +603,12 @@ const PatchDefinition fixed_patches[FIXED_PATCH_COUNT] = {
     {0x103c87d, 0x103be7d, 5, GROUP_DRIFT_CAMERA, "drift_camera_chase_spring_call",
      drift_camera_chase_spring_call_bytes_0, drift_camera_chase_spring_call_bytes_1,
      drift_camera_chase_spring_call_bytes_1, drift_camera_chase_spring_call_accepted, 2},
+    {0x1057635, 0x1056c35, 5, GROUP_AERO_TUNING, "front_aero_physics_ranges",
+     front_aero_physics_ranges_bytes_0, front_aero_physics_ranges_bytes_1,
+     front_aero_physics_ranges_bytes_1, front_aero_physics_ranges_accepted, 2},
+    {0x10576b0, 0x1056cb0, 5, GROUP_AERO_TUNING, "rear_aero_physics_ranges",
+     rear_aero_physics_ranges_bytes_0, rear_aero_physics_ranges_bytes_1,
+     rear_aero_physics_ranges_bytes_1, rear_aero_physics_ranges_accepted, 2},
     {0x1131c02, 0x1131202, 7, GROUP_SUN_SHADOWS, "sun_shadow_all_cascades_per_frame",
      sun_shadow_all_cascades_per_frame_bytes_0, sun_shadow_all_cascades_per_frame_bytes_1,
      sun_shadow_all_cascades_per_frame_bytes_1, sun_shadow_all_cascades_per_frame_accepted, 2},

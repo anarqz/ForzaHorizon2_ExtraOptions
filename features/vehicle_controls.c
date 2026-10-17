@@ -1,4 +1,5 @@
 #include "vehicle_controls.h"
+#include "blinkers.h"
 #include "autodrive_game.h"
 #include "features.h"
 #include "roof_fade.h"
@@ -119,6 +120,7 @@ void vehicle_controls_bind(unsigned char *image) {
         roof_lock.remaining = 0;
     }
     game_image = image;
+    blinkers_bind(image, clock_milliseconds);
     roof_fade_prepare_hook(image);
     uintptr_t original = (uintptr_t)(image + 0x2a9400);
     uintptr_t replacement = (uintptr_t)vehicle_update;
@@ -677,6 +679,7 @@ static void vehicle_update(void *self, float dt, float frame_dt, unsigned frame)
     void *local_car = autodrive_game_get_car();
     int owned = local_car == self;
     if (owned) {
+        blinkers_tick(local_car, autodrive_game_window_focused(), clock_milliseconds());
         close_roof_for_car_meet(local_car);
         vehicle_controls_tick(local_car, autodrive_game_window_focused());
         maintain_controls(self);
@@ -691,6 +694,9 @@ static void vehicle_update(void *self, float dt, float frame_dt, unsigned frame)
     ((CarUpdate)(game_image + 0x2a9400))(self, dt, frame_dt, frame);
     if (owned) {
         maintain_controls(self);
+    }
+    if (owned) {
+        return_garage_tick();
     }
 #ifdef FH2_AZIMUTH
     if (remote) {
@@ -710,6 +716,7 @@ __declspec(dllexport) void *Fh2TestVehicleHookAddress(void) {
 
 __declspec(dllexport) void Fh2TestVehicleReset(void) {
     finish_roof_transition();
+    blinkers_reset();
     gesture = (VehicleGesture){.blocked = 1};
     headlights = (HeadlightState){0};
     roof = (RoofState){0};

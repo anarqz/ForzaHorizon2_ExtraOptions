@@ -58,7 +58,8 @@ static const char all_rims_order[] =
 static const char stock_parts[] =
     " FROM Upgrades JOIN (SELECT 43 AS PartEnum, ID AS PartId, 1 AS IsException, "
     "0 AS IsStock, 1 AS Level, PartManufacturerID AS ManufacturerId, Price "
-    "FROM List_Wheels WHERE IsStock = 1 AND EXISTS "
+    "FROM List_Wheels WHERE IsStock = 1 AND MediaName COLLATE NOCASE NOT IN "
+    "('NUL_Car_00', 'PG_BUS_14', 'PG_BoxTruck_14') AND EXISTS "
     "(SELECT 1 FROM Data_Car WHERE StockWheelID = List_Wheels.ID)) AS PartTable";
 static const char stock_join_source[] =
     "JOIN WheelAnnotations ON WheelAnnotations.WheelId = List_Wheels.Id JOIN WheelCategories "
@@ -180,13 +181,13 @@ static int plan_stock_query(const char *query, QueryPlan *plan) {
                query, plan, manufacturer_source,
                "COALESCE(NULLIF(FH2_STOCK_RIM_NAME(COALESCE(StockMake.DisplayName, '')), ''), "
                "StockCar.MediaName, List_Wheels.MediaName) AS ManufacturerName") &&
-           replace_fragment(
-               query, plan, name_source,
-               "COALESCE(NULLIF(FH2_STOCK_RIM_NAME(COALESCE(StockCar.DisplayName, '')), ''), "
-               "StockCar.MediaName, List_Wheels.MediaName) AS Name") &&
+           replace_fragment(query, plan, name_source,
+                            "COALESCE(NULLIF(StockCar.DisplayName, ''), "
+                            "StockCar.MediaName, List_Wheels.MediaName) AS Name") &&
            replace_fragment(query, plan, logo_source, stock_logo) &&
            replace_fragment(query, plan, icon_source, stock_icon) &&
-           replace_fragment(query, plan, rims_order, stock_order);
+           replace_fragment(query, plan, rims_order, stock_order) &&
+           replace_fragment(query, plan, "0 UseDarkBg", "1 UseDarkBg");
 }
 
 static int plan_query(const char *query, QueryPlan *plan) {
@@ -266,6 +267,47 @@ static void load_rim_query(void *collection, const char *query, void *database) 
     free_query(combined);
 }
 
+static void **selected_stock_rim_name(void *page, void **output) {
+    void *original = *(void **)((unsigned char *)page + 0x4f0);
+    if (*(int *)((unsigned char *)page + 0x500) == 6 && original) {
+        const wchar_t *text = *(const wchar_t **)((unsigned char *)original + 0x28);
+        int length = *(int *)((unsigned char *)original + 0x30);
+        unsigned key = 0;
+        int valid = text && length >= 3 && length <= 12 && text[0] == L'_' && text[1] == L'&';
+        for (int i = 2; valid && i < length; ++i) {
+            unsigned digit = text[i] - L'0';
+            valid = digit <= 9 && key <= (0xffffffffu - digit) / 10;
+            if (valid) {
+                key = key * 10 + digit;
+            }
+        }
+        void *manager;
+        if (valid && memory_read_pointer(game + 0x3662990, &manager)) {
+            unsigned short table = ((LocalizedTable)(game + 0x123d830))(manager, key);
+            const wchar_t *name = ((LocalizedText)(game + 0x123d780))(manager, table, key & 0xffff);
+            if (name && *name) {
+                return ((void **(*)(void **, const wchar_t *))(game + 0x13fe8e0))(output, name);
+            }
+        }
+    }
+    return ((void **(*)(void *, void **))(game + 0xed7d90))(page, output);
+}
+
+static unsigned char rim_name_thunk[12];
+static const unsigned char unused_name_thunk[12] = {0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc,
+                                                    0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc};
+static const unsigned char *const accepted_name_thunk[] = {unused_name_thunk, rim_name_thunk};
+PatchDefinition rim_name_hook_patch = {0xeb0274,
+                                       0,
+                                       12,
+                                       GROUP_RIMS,
+                                       "stock_rim_localized_name_thunk",
+                                       unused_name_thunk,
+                                       rim_name_thunk,
+                                       rim_name_thunk,
+                                       accepted_name_thunk,
+                                       2};
+
 PatchDefinition rims_hook_patch = {QUERY_CALLBACK_SLOT,
                                    0,
                                    8,
@@ -279,6 +321,10 @@ PatchDefinition rims_hook_patch = {QUERY_CALLBACK_SLOT,
 
 void rims_prepare_hook(unsigned char *image) {
     game = image;
+    const unsigned char jump[] = {0x48, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xe0};
+    uintptr_t name_callback = (uintptr_t)selected_stock_rim_name;
+    memory_copy(rim_name_thunk, jump, sizeof(jump));
+    memory_copy(rim_name_thunk + 2, &name_callback, 8);
     stock_wheels_prepare_hooks(image);
     original_load = (LoadQuery)(image + 0x140c3f0);
     allocate = (Allocate)(image + 0x3229c0);
@@ -288,6 +334,10 @@ void rims_prepare_hook(unsigned char *image) {
 }
 
 #ifdef FH2_TWEAKS_TEST
+__declspec(dllexport) void *Fh2TestRimNameGetter(void) {
+    return selected_stock_rim_name;
+}
+
 __declspec(dllexport) void *Fh2TestRimsHookAddress(void) {
     return (void *)load_rim_query;
 }
