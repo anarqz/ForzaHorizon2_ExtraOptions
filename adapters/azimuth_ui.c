@@ -130,7 +130,8 @@ static int ui_edit_options(const char *page, unsigned length, UiText *out) {
 /* The pause menu with the status line after its player bar (same top margin as the bar).
    `text` is either a literal or "{local:Loc Category.Key}". */
 /* `alert1` / `alert2`: the texts of two more lines in red, in the same place (Loc bindings of the
-   live alert strings; 0 for none). */
+   live alert strings; 0 for none). Every line has a fixed width, its text centred in it: the game
+   measures a text block once, so a line built with a short text cut a longer one later. */
 static int ui_edit_pause(const char *page, unsigned length, const char *text, const char *alert1, const char *alert2,
                          UiText *out) {
     const char *bar = ui_find(page, length, "x:Name=\"TopBar\" />", 0);
@@ -141,19 +142,19 @@ static int ui_edit_pause(const char *page, unsigned length, const char *text, co
     out->length = 0;
     int ok = ui_copy(out, &at, bar + text_length("x:Name=\"TopBar\" />"), 0,
                      "\r\n        <local:FZTextBlock HorizontalAlignment=\"Center\" VerticalAlignment=\"Top\" "
-                     "Margin=\"0,40,0,0\" Text=\"") &&
+                     "Margin=\"0,40,0,0\" Width=\"900\" TextAlignment=\"Center\" Text=\"") &&
              ui_copy(out, &at, at, 0, text) &&
              ui_copy(out, &at, at, 0,
                      "\" Style=\"{StaticResource A_Style_FZTextBlock_AnthemA}\" Color=\"#f5f5f5\" FontSize=\"24\" />");
     if (ok && alert1 && alert2) {
         ok = ui_copy(out, &at, at, 0,
                      "\r\n        <local:FZTextBlock HorizontalAlignment=\"Center\" VerticalAlignment=\"Top\" "
-                     "Margin=\"0,40,0,0\" Text=\"") &&
+                     "Margin=\"0,40,0,0\" Width=\"900\" TextAlignment=\"Center\" Text=\"") &&
              ui_copy(out, &at, at, 0, alert1) &&
              ui_copy(out, &at, at, 0,
                      "\" Style=\"{StaticResource A_Style_FZTextBlock_AnthemA}\" Color=\"#ff4f4f\" FontSize=\"24\" />"
                      "\r\n        <local:FZTextBlock HorizontalAlignment=\"Center\" VerticalAlignment=\"Top\" "
-                     "Margin=\"0,72,0,0\" Text=\"") &&
+                     "Margin=\"0,72,0,0\" Width=\"900\" TextAlignment=\"Center\" Text=\"") &&
              ui_copy(out, &at, at, 0, alert2) &&
              ui_copy(out, &at, at, 0,
                      "\" Style=\"{StaticResource A_Style_FZTextBlock_AnthemA}\" Color=\"#ff4f4f\" FontSize=\"24\" />");
