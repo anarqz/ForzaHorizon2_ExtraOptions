@@ -14,6 +14,7 @@
 #include "azimuth_host.h"
 #include "logging.h"
 #include "support.h"
+#include "azimuth_font_widths.h"
 
 #define UI_ZIP_OPEN_RVA 0x11ecbd0u
 #define UI_MEMORY_STREAM_RVA 0x11e0640u
@@ -260,59 +261,63 @@ static void ui_cat(char *out, size_t cap, const char *text) {
     out[n] = 0;
 }
 
-/* `utf8` into a kept string buffer, padded with NULs to its full length. */
+/* A glyph's advance in Anthem_A, the status lines' font (azimuth_font_widths.h), in thousandths
+   of an em. */
+static unsigned ui_glyph_width(wchar_t c) {
+    unsigned lo = 0, hi = ARRAY_COUNT(azimuth_font_widths);
+    while (lo < hi) {
+        unsigned mid = (lo + hi) / 2;
+        if (azimuth_font_widths[mid].codepoint == c) {
+            return azimuth_font_widths[mid].advance;
+        }
+        if (azimuth_font_widths[mid].codepoint < c) {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
+    }
+    return 500;
+}
+
+/* `utf8` into a kept string buffer, centred, or (0) a line that is off. The game lays a text
+   block out once, with as many characters as it had then (and their width), and later draws at
+   most that many from where they started (a line built with 40 characters cut a longer text at
+   the 40th; one built with one space showed one letter). So a line always holds its string's
+   whole length in no-break spaces around the text, and the text sits after half the width it
+   leaves. */
 static void ui_string_set(wchar_t *buffer, size_t capacity, const char *utf8) {
-    static wchar_t wide[260];
+    static wchar_t wide[400];
     if (!buffer) {
         return;
     }
-    int got = MultiByteToWideChar(CP_UTF8, 0, utf8, -1, wide, (int)ARRAY_COUNT(wide));
-    size_t n = 0;
-    for (; got > 0 && wide[n] && n < capacity; ++n) {
-        buffer[n] = wide[n];
-    }
-    for (size_t i = n; i <= capacity; ++i) {
-        buffer[i] = 0;
-    }
-}
-
-/* The alert texts' widths in no-break spaces of Anthem_A (media/ui/Fonts.zip Anthem_A.vfont: a
-   glyph table of 28-byte records, codepoint u32 then advance f32 in em; NBSP 0.18 em). */
-static const struct {
-    const char *text;
-    unsigned nbsp_width;
-} ui_alert_widths[] = {
-    {"SUSPECTED INCOMPATIBLE PROGRESS", 78},
-    {"RESTART YOUR GAME", 43},
-    {"SUSPEITA DE PROGRESSO N\xC3\x83O COMPAT\xC3\x8DVEL", 88},
-    {"REINICIE SEU JOGO", 38},
-};
-
-/* Red line `i`: `text` centred in its width, or (0) its blank: no-break spaces all the way. */
-static void ui_alert_set(int i, const char *text) {
-    static char line[400];
-    size_t cap = ui_alert_capacity[i], n = 0, pad = cap;
-    if (!ui_alert_text[i]) {
-        return;
-    }
-    if (text) {
-        unsigned width = 0;
-        for (unsigned k = 0; k < ARRAY_COUNT(ui_alert_widths); ++k) {
-            if (memory_equal(ui_alert_widths[k].text, text, text_length(text) + 1)) {
-                width = ui_alert_widths[k].nbsp_width;
-            }
+    size_t length = 0;
+    if (utf8 && MultiByteToWideChar(CP_UTF8, 0, utf8, -1, wide, (int)ARRAY_COUNT(wide)) > 0) {
+        while (wide[length]) {
+            ++length;
         }
-        pad = width && width < cap ? (cap - width) / 2 : 0;
     }
-    for (size_t k = 0; k < pad && n + 3 < sizeof(line); ++k) {
-        line[n++] = (char)0xC2;
-        line[n++] = (char)0xA0;
+    if (length > capacity) {
+        length = capacity;
     }
-    line[n] = 0;
-    if (text) {
-        ui_cat(line, sizeof(line), text);
+    unsigned width = 0, space = ui_glyph_width(0xA0);
+    for (size_t i = 0; i < length; ++i) {
+        width += ui_glyph_width(wide[i]);
     }
-    ui_string_set(ui_alert_text[i], ui_alert_capacity[i], line);
+    size_t pad = width < capacity * space ? (capacity * space - width) / space / 2 : 0;
+    if (pad > capacity - length) {
+        pad = capacity - length;
+    }
+    size_t n = 0;
+    while (n < pad) {
+        buffer[n++] = 0xA0;
+    }
+    for (size_t i = 0; i < length; ++i) {
+        buffer[n++] = wide[i];
+    }
+    while (n < capacity) {
+        buffer[n++] = 0xA0;
+    }
+    buffer[capacity] = 0;
 }
 
 /* Writes the current status into those strings: the white line, or (the cloud sync stopped:
@@ -330,14 +335,9 @@ static void ui_status_write(void) {
         return;
     }
     int alert = azimuth_cloud_stopped() && ui_alert_text[0] && ui_alert_text[1];
-    ui_string_set(ui_status_text, ui_status_capacity, alert ? "" : text);
-    /* The game lays a text block out once, with as many characters as it had then, and later
-       draws at most that many, from where that first text started (the white line built with 40
-       characters cut a longer text at the 40th; red lines built with one space showed one letter).
-       So while off each red line holds as many no-break spaces as its string has room for, and a
-       text is drawn after half of what is left of that width: centred. */
-    ui_alert_set(0, alert ? azimuth_tr8("SUSPECTED INCOMPATIBLE PROGRESS") : 0);
-    ui_alert_set(1, alert ? azimuth_tr8("RESTART YOUR GAME") : 0);
+    ui_string_set(ui_status_text, ui_status_capacity, alert ? 0 : text);
+    ui_string_set(ui_alert_text[0], ui_alert_capacity[0], alert ? azimuth_tr8("SUSPECTED INCOMPATIBLE PROGRESS") : 0);
+    ui_string_set(ui_alert_text[1], ui_alert_capacity[1], alert ? azimuth_tr8("RESTART YOUR GAME") : 0);
     InterlockedExchange(&busy, 0);
 }
 
