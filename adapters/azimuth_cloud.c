@@ -240,15 +240,16 @@ static int parse_hex16(const wchar_t *name, unsigned long long *value) {
     return name[16] == 0;
 }
 
-/* The newest revision with a commit file; `highest` gets the highest number seen at all. */
-static void newest_revision(CloudRevision *out, unsigned long long *highest) {
+/* The newest revision with a commit file of the container in `base`; `highest` gets the
+   highest number seen at all. */
+static void newest_revision_in(const wchar_t *base, CloudRevision *out, unsigned long long *highest) {
     static wchar_t pattern[CLOUD_PATH], commit_path[CLOUD_PATH];
     static WIN32_FIND_DATAW entry;
     out->found = 0;
     if (highest) {
         *highest = 0;
     }
-    if (!wjoin(pattern, cloud_profile, L"\\revisions\\*", 0)) {
+    if (!wjoin(pattern, base, L"\\revisions\\*", 0)) {
         return;
     }
     HANDLE find = cloud_find_first(pattern, &entry);
@@ -267,7 +268,7 @@ static void newest_revision(CloudRevision *out, unsigned long long *highest) {
         }
         wchar_t name[17];
         hex16(number, name);
-        if (!wjoin(commit_path, cloud_profile, L"\\revisions\\", name) || !wjoin(commit_path, commit_path, L"\\commit", 0)) {
+        if (!wjoin(commit_path, base, L"\\revisions\\", name) || !wjoin(commit_path, commit_path, L"\\commit", 0)) {
             continue;
         }
         HANDLE file = CreateFileW(commit_path, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, 0,
@@ -287,7 +288,7 @@ static void newest_revision(CloudRevision *out, unsigned long long *highest) {
     }
     wchar_t name[17];
     hex16(best, name);
-    if (!wjoin(out->path, cloud_profile, L"\\revisions\\", name) || !wjoin(commit_path, out->path, L"\\commit", 0)) {
+    if (!wjoin(out->path, base, L"\\revisions\\", name) || !wjoin(commit_path, out->path, L"\\commit", 0)) {
         return;
     }
     size_t size;
@@ -299,6 +300,11 @@ static void newest_revision(CloudRevision *out, unsigned long long *highest) {
     cloud_free(commit);
     out->number = best;
     out->found = 1;
+}
+
+/* The profile's own newest revision. */
+static void newest_revision(CloudRevision *out, unsigned long long *highest) {
+    newest_revision_in(cloud_profile, out, highest);
 }
 
 /* ---------------------------------------------------------------- bundle */
@@ -667,6 +673,591 @@ static void back_up(const CloudRevision *revision) {
     }
 }
 
+/* ------------------------------------------------------------- creations */
+
+/* The player's own files beside the profile's save: every other container in player-1
+   (Livery_*, BaseLivery_*, GarageThumbnail_*, LayerGroup_*, tunes: designs, vinyl groups and
+   tuning setups). Azimuth keeps them for the whole PC, not per profile. Each one's newest
+   revision is kept on the server for the account (server/src/db/creations.rs, "FH2FILE1"), so
+   they follow the profile to another PC:
+   - at start: a creation the server keeps and this PC lacks is written here, unless this PC
+     had synced it before (the player deleted it: it is deleted on the server too); one this PC
+     has and the server does not (or another revision of) is uploaded;
+   - while playing (every minute): new or changed ones are uploaded, deleted ones deleted.
+   What was synced is listed in saves\fh2online-creations-<profile>.txt ("name commit" lines).
+   A downloaded creation is installed only if every file matches its commit's SHA-256 and size. */
+
+#define CREATION_MAX 320
+#define CREATION_NAME 80
+#define CREATION_FILES 16
+#define CREATION_MAX_BUNDLE (1u << 20) /* as the server takes */
+
+typedef struct {
+    char name[CREATION_NAME];
+    char commit[65];
+} Creation;
+
+typedef struct {
+    unsigned count;
+    Creation item[CREATION_MAX];
+} CreationList;
+
+static CreationList creations_local, creations_server, creations_synced;
+static wchar_t creations_player[CLOUD_PATH]; /* <saves>\player-1 */
+static wchar_t creations_file[CLOUD_PATH];   /* <saves>\fh2online-creations-User_<hex>.txt */
+
+static int creation_name_ok(const char *name) {
+    size_t n = text_length(name), kind = 0;
+    while (kind < n && ((name[kind] | 32) >= 'a' && (name[kind] | 32) <= 'z')) {
+        ++kind;
+    }
+    if (!kind || kind > 24 || kind >= n || name[kind] != '_' || n - kind - 1 > 48 || n >= CREATION_NAME) {
+        return 0;
+    }
+    for (size_t i = kind + 1; i < n; ++i) {
+        char c = name[i];
+        if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '_')) {
+            return 0;
+        }
+    }
+    return !(kind == 4 && (name[0] | 32) == 'u' && (name[1] | 32) == 's' && (name[2] | 32) == 'e' && (name[3] | 32) == 'r');
+}
+
+static Creation *creation_find(CreationList *list, const char *name) {
+    for (unsigned i = 0; i < list->count; ++i) {
+        if (text_length(list->item[i].name) == text_length(name) && memory_equal(list->item[i].name, name, text_length(name))) {
+            return &list->item[i];
+        }
+    }
+    return 0;
+}
+
+static void creation_put(CreationList *list, const char *name, const char *commit) {
+    Creation *c = creation_find(list, name);
+    if (!c) {
+        if (list->count >= CREATION_MAX) {
+            return;
+        }
+        c = &list->item[list->count++];
+        memory_copy(c->name, name, text_length(name) + 1);
+    }
+    memory_copy(c->commit, commit, 64);
+    c->commit[64] = 0;
+}
+
+static void creation_remove(CreationList *list, const char *name) {
+    Creation *c = creation_find(list, name);
+    if (c) {
+        --list->count;
+        if (c != &list->item[list->count]) {
+            memory_copy(c, &list->item[list->count], sizeof(*c));
+        }
+    }
+}
+
+static void creation_path(wchar_t *out, const char *name) {
+    static wchar_t wide[CREATION_NAME];
+    size_t n = 0;
+    for (; name[n] && n + 1 < CREATION_NAME; ++n) {
+        wide[n] = (wchar_t)name[n];
+    }
+    wide[n] = 0;
+    wjoin(out, creations_player, L"\\", wide);
+}
+
+/* Every creation container in player-1 with a complete revision. 0 when player-1 cannot be
+   read or holds no profile at all (then nothing is taken as deleted). */
+static int creations_scan(CreationList *list) {
+    static wchar_t pattern[CLOUD_PATH];
+    static WIN32_FIND_DATAW entry;
+    static CloudRevision revision;
+    static char name[CREATION_NAME];
+    int profiles = 0;
+    list->count = 0;
+    if (!wjoin(pattern, creations_player, L"\\*", 0)) {
+        return 0;
+    }
+    HANDLE find = cloud_find_first(pattern, &entry);
+    if (find == INVALID_HANDLE_VALUE) {
+        return 0;
+    }
+    do {
+        if (!(entry.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) {
+            continue;
+        }
+        size_t n = 0;
+        int ascii = 1;
+        for (; entry.cFileName[n] && n + 1 < CREATION_NAME; ++n) {
+            ascii &= entry.cFileName[n] < 128;
+            name[n] = (char)entry.cFileName[n];
+        }
+        name[n] = 0;
+        if (n > 5 && memory_equal(name, "User_", 5)) {
+            ++profiles;
+            continue;
+        }
+        if (!ascii || entry.cFileName[n] || !creation_name_ok(name)) {
+            continue;
+        }
+        static wchar_t base[CLOUD_PATH];
+        creation_path(base, name);
+        newest_revision_in(base, &revision, 0);
+        if (revision.found) {
+            creation_put(list, name, revision.commit);
+        }
+    } while (cloud_find_next(find, &entry));
+    cloud_find_close(find);
+    return profiles > 0;
+}
+
+static void creations_load(void) {
+    size_t size;
+    unsigned char *text = read_file(creations_file, 1 << 20, &size);
+    creations_synced.count = 0;
+    if (!text) {
+        return;
+    }
+    for (size_t at = 0; at < size;) {
+        size_t end = at;
+        while (end < size && text[end] != '\n') {
+            ++end;
+        }
+        size_t space = at;
+        while (space < end && text[space] != ' ') {
+            ++space;
+        }
+        if (space - at < CREATION_NAME && end - space - 1 >= 64) {
+            char name[CREATION_NAME], commit[65];
+            memory_copy(name, text + at, space - at);
+            name[space - at] = 0;
+            memory_copy(commit, text + space + 1, 64);
+            commit[64] = 0;
+            if (creation_name_ok(name)) {
+                creation_put(&creations_synced, name, commit);
+            }
+        }
+        at = end + 1;
+    }
+    cloud_free(text);
+}
+
+static void creations_save(void) {
+    static char text[CREATION_MAX * (CREATION_NAME + 67)];
+    size_t n = 0;
+    for (unsigned i = 0; i < creations_synced.count; ++i) {
+        size_t len = text_length(creations_synced.item[i].name);
+        memory_copy(text + n, creations_synced.item[i].name, len);
+        n += len;
+        text[n++] = ' ';
+        memory_copy(text + n, creations_synced.item[i].commit, 64);
+        n += 64;
+        text[n++] = '\n';
+    }
+    write_file(creations_file, (const unsigned char *)text, n);
+}
+
+/* The data file names a commit lists ("<sha256> <size> <name>" lines), into `names`. */
+static unsigned commit_names(const unsigned char *commit, size_t size, char names[CREATION_FILES][56]) {
+    unsigned count = 0;
+    for (size_t at = 0; at < size && count < CREATION_FILES;) {
+        size_t end = at;
+        while (end < size && commit[end] != '\n') {
+            ++end;
+        }
+        size_t p = at + 65;
+        if (end - at > 66 && commit[at + 64] == ' ') {
+            while (p < end && commit[p] >= '0' && commit[p] <= '9') {
+                ++p;
+            }
+            size_t len = end - p - 1;
+            if (p < end && commit[p] == ' ' && len && len < 48) {
+                int ok = 1;
+                for (size_t i = 0; i < len; ++i) {
+                    char c = (char)commit[p + 1 + i];
+                    ok &= (c >= '0' && c <= '9') || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '_' || c == '.';
+                }
+                if (ok) {
+                    memory_copy(names[count], "data/", 5);
+                    memory_copy(names[count] + 5, commit + p + 1, len);
+                    names[count][5 + len] = 0;
+                    ++count;
+                }
+            }
+        }
+        at = end + 1;
+    }
+    return count;
+}
+
+/* A creation's newest revision as an FH2FILE1 bundle (caller frees), or NULL. */
+static unsigned char *creation_bundle(const wchar_t *revision, size_t *size) {
+    static wchar_t path[CLOUD_PATH], wide[64];
+    static char names[CREATION_FILES + 1][56];
+    unsigned char *files[CREATION_FILES + 1] = {0};
+    size_t sizes[CREATION_FILES + 1] = {0}, total = 12;
+    unsigned char *bundle = 0;
+    unsigned count = 0;
+    *size = 0;
+    memory_copy(names[0], "commit", 7);
+    if (!wjoin(path, revision, L"\\commit", 0) || !(files[0] = read_file(path, 1 << 16, &sizes[0]))) {
+        return 0;
+    }
+    count = 1 + commit_names(files[0], sizes[0], (char (*)[56])names[1]);
+    for (unsigned i = 0; i < count; ++i) {
+        if (i) {
+            file_name_wide(names[i], wide, ARRAY_COUNT(wide));
+            if (!wjoin(path, revision, L"\\", wide) || !(files[i] = read_file(path, CREATION_MAX_BUNDLE, &sizes[i]))) {
+                goto done;
+            }
+        }
+        total += 2 + text_length(names[i]) + 9 + sizes[i];
+    }
+    if (total > CREATION_MAX_BUNDLE || !(bundle = cloud_alloc(total))) {
+        goto done;
+    }
+    memory_copy(bundle, "FH2FILE1", 8);
+    put32(bundle + 8, count);
+    size_t at = 12;
+    for (unsigned i = 0; i < count; ++i) {
+        size_t name_length = text_length(names[i]);
+        bundle[at] = (unsigned char)name_length;
+        bundle[at + 1] = 0;
+        memory_copy(bundle + at + 2, names[i], name_length);
+        at += 2 + name_length;
+        unsigned char *header = bundle + at;
+        at += 9;
+        size_t packed = 0;
+        int method = 0;
+        if (sizes[i] >= 64 && cloud_workspace &&
+            (packed = codec_lz_encode(files[i], sizes[i], bundle + at, sizes[i] - 1, cloud_workspace)) != 0) {
+            method = 2;
+        } else {
+            memory_copy(bundle + at, files[i], sizes[i]);
+            packed = sizes[i];
+        }
+        put32(header, (unsigned)sizes[i]);
+        put32(header + 4, (unsigned)packed);
+        header[8] = (unsigned char)method;
+        at += packed;
+    }
+    *size = at;
+done:
+    for (unsigned i = 0; i <= CREATION_FILES; ++i) {
+        cloud_free(files[i]);
+    }
+    return bundle;
+}
+
+/* Writes a downloaded FH2FILE1 bundle as `name`'s first revision. 1 when installed. */
+static int creation_install(const char *name, const unsigned char *bundle, size_t size) {
+    static wchar_t base[CLOUD_PATH], revisions[CLOUD_PATH], incoming[CLOUD_PATH], target[CLOUD_PATH], path[CLOUD_PATH],
+        wide[64];
+    static char names[CREATION_FILES][56];
+    unsigned char *out[CREATION_FILES] = {0};
+    size_t out_size[CREATION_FILES] = {0};
+    int ok = 0, commit = -1;
+    if (size < 12 || !memory_equal(bundle, "FH2FILE1", 8)) {
+        return 0;
+    }
+    unsigned count = get32(bundle + 8);
+    size_t at = 12;
+    if (!count || count > CREATION_FILES) {
+        return 0;
+    }
+    for (unsigned k = 0; k < count; ++k) {
+        if (at + 2 > size) {
+            goto done;
+        }
+        size_t name_length = bundle[at] | (size_t)bundle[at + 1] << 8;
+        at += 2;
+        if (name_length >= 56 || at + name_length + 9 > size) {
+            goto done;
+        }
+        memory_copy(names[k], bundle + at, name_length);
+        names[k][name_length] = 0;
+        at += name_length;
+        unsigned raw = get32(bundle + at), stored = get32(bundle + at + 4);
+        int method = bundle[at + 8];
+        at += 9;
+        int data = name_length > 5 && memory_equal(names[k], "data/", 5);
+        for (size_t i = data ? 5 : 0; data && i < name_length; ++i) {
+            char c = names[k][i];
+            data = (c >= '0' && c <= '9') || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '_' || c == '.';
+        }
+        int is_commit = name_length == 6 && memory_equal(names[k], "commit", 6);
+        if ((!data && !is_commit) || (is_commit && commit >= 0) || raw > CREATION_MAX_BUNDLE || stored > size - at ||
+            (method != 0 && method != 2) || (method == 0 && stored != raw)) {
+            goto done;
+        }
+        if (is_commit) {
+            commit = (int)k;
+        }
+        out[k] = cloud_alloc(raw ? raw : 1);
+        if (!out[k] || (method == 0 ? (memory_copy(out[k], bundle + at, raw), 0)
+                                    : !codec_lz_decode(bundle + at, stored, out[k], raw))) {
+            goto done;
+        }
+        out_size[k] = raw;
+        at += stored;
+    }
+    if (at != size || commit < 0) {
+        goto done;
+    }
+    for (unsigned k = 0; k < count; ++k) {
+        if ((int)k != commit && !commit_lists(out[commit], out_size[commit], names[k] + 5, out[k], out_size[k])) {
+            cloud_log("downloaded creation does not match its commit: ", name);
+            goto done;
+        }
+    }
+    wchar_t stamp[17];
+    hex16(GetTickCount64(), stamp);
+    creation_path(base, name);
+    if (!wjoin(revisions, base, L"\\revisions", 0) || !wjoin(target, revisions, L"\\0000000000000001", 0) ||
+        !wjoin(incoming, cloud_saves, L"\\fh2online-incoming-", stamp) || !wjoin(path, incoming, L"\\data", 0) ||
+        !cloud_create_directory(incoming, 0) || !cloud_create_directory(path, 0)) {
+        goto done;
+    }
+    for (unsigned k = 0; k < count; ++k) {
+        file_name_wide(names[k], wide, ARRAY_COUNT(wide));
+        if (!wjoin(path, incoming, L"\\", wide) || !write_file(path, out[k], out_size[k])) {
+            goto done;
+        }
+    }
+    cloud_create_directory(base, 0);
+    cloud_create_directory(revisions, 0);
+    ok = cloud_move(incoming, target, 0) != 0;
+done:
+    for (unsigned k = 0; k < CREATION_FILES; ++k) {
+        cloud_free(out[k]);
+    }
+    return ok;
+}
+
+static void creation_route(wchar_t *out, const char *name) {
+    static wchar_t wide[CREATION_NAME];
+    size_t n = 0;
+    for (; name[n] && n + 1 < CREATION_NAME; ++n) {
+        wide[n] = (wchar_t)name[n];
+    }
+    wide[n] = 0;
+    wjoin(out, L"/infinity/v1/creations/", wide, 0);
+}
+
+static int creation_upload(const char *name, const char *commit) {
+    static wchar_t base[CLOUD_PATH], route[CLOUD_PATH], headers[300];
+    static CloudRevision revision;
+    char reply[200];
+    size_t got = 0, size = 0;
+    creation_path(base, name);
+    newest_revision_in(base, &revision, 0);
+    if (!revision.found || !memory_equal(revision.commit, commit, 64)) {
+        return 0;
+    }
+    unsigned char *bundle = creation_bundle(revision.path, &size);
+    if (!bundle) {
+        cloud_log("could not read the creation ", name);
+        return 0;
+    }
+    wchar_t hash[65];
+    for (int i = 0; i < 64; ++i) {
+        hash[i] = (wchar_t)commit[i];
+    }
+    hash[64] = 0;
+    wjoin(headers, cloud_headers, L"\r\nX-Fh2-Commit: ", hash);
+    creation_route(route, name);
+    DWORD status = azimuth_net_request(L"PUT", route, headers, L"application/octet-stream", bundle, size, reply,
+                                       sizeof(reply) - 1, &got);
+    cloud_free(bundle);
+    if (status != 200) {
+        reply[got] = 0;
+        cloud_log("creation upload refused: ", reply);
+        return 0;
+    }
+    return 1;
+}
+
+static int creation_delete(const char *name) {
+    static wchar_t route[CLOUD_PATH];
+    char reply[64];
+    size_t got = 0;
+    creation_route(route, name);
+    DWORD status = azimuth_net_request(L"DELETE", route, cloud_headers, L"application/json", 0, 0, reply, sizeof(reply), &got);
+    return status == 204 || status == 200;
+}
+
+static int creation_download(const char *name) {
+    static wchar_t route[CLOUD_PATH];
+    unsigned char *bundle = cloud_alloc(CREATION_MAX_BUNDLE);
+    size_t size = 0;
+    int ok = 0;
+    if (!bundle) {
+        return 0;
+    }
+    creation_route(route, name);
+    DWORD status = azimuth_net_request(L"GET", route, cloud_headers, L"application/json", 0, 0, bundle,
+                                       CREATION_MAX_BUNDLE, &size);
+    if (status == 200 && size < CREATION_MAX_BUNDLE) {
+        ok = creation_install(name, bundle, size);
+    }
+    cloud_free(bundle);
+    return ok;
+}
+
+/* GET creations: {"creations":[{"commit":"...","name":"..."}, ...]} into creations_server. */
+static int creations_fetch(void) {
+    size_t cap = CREATION_MAX * (CREATION_NAME + 100) + 64, got = 0;
+    char *reply = cloud_alloc(cap);
+    creations_server.count = 0;
+    if (!reply) {
+        return 0;
+    }
+    DWORD status = azimuth_net_request(L"GET", L"/infinity/v1/creations", cloud_headers, L"application/json", 0, 0, reply,
+                                       cap - 1, &got);
+    if (status != 200) {
+        cloud_free(reply);
+        return 0;
+    }
+    reply[got] = 0;
+    for (char *p = reply; (p = (char *)text_find(p, text_length(p), "{")) != 0; ++p) {
+        char *end = p;
+        while (*end && *end != '}') {
+            ++end;
+        }
+        static char name[CREATION_NAME], commit[65];
+        name[0] = 0;
+        commit[0] = 0;
+        for (int key = 0; key < 2; ++key) {
+            const char *k = key ? "\"commit\":\"" : "\"name\":\"";
+            const char *v = text_find(p, (size_t)(end - p), k);
+            if (!v) {
+                continue;
+            }
+            v += text_length(k);
+            size_t n = 0;
+            char *into = key ? commit : name;
+            size_t cap_key = key ? 64 : CREATION_NAME - 1;
+            while (v + n < end && v[n] != '"' && n < cap_key) {
+                into[n] = v[n];
+                ++n;
+            }
+            into[n] = 0;
+        }
+        if (creation_name_ok(name) && text_length(commit) == 64) {
+            creation_put(&creations_server, name, commit);
+        }
+        if (!*end) {
+            break;
+        }
+        p = end;
+    }
+    cloud_free(reply);
+    return 1;
+}
+
+/* At start, once the session is in step with the server. */
+static void creations_start(const wchar_t *profile_folder_name) {
+    unsigned up = 0, down = 0, gone = 0;
+    if (!wjoin(creations_player, cloud_saves, L"\\player-1", 0) ||
+        !wjoin(creations_file, cloud_saves, L"\\fh2online-creations-", profile_folder_name) ||
+        !wjoin(creations_file, creations_file, L".txt", 0)) {
+        return;
+    }
+    creations_load();
+    if (!creations_scan(&creations_local) || !creations_fetch()) {
+        log_append("CLOUD: creations not synced this time (player-1 or the server could not be read).\r\n");
+        return;
+    }
+    for (unsigned i = 0; i < creations_server.count; ++i) {
+        Creation *s = &creations_server.item[i];
+        if (creation_find(&creations_local, s->name)) {
+            continue;
+        }
+        if (creation_find(&creations_synced, s->name)) {
+            /* synced from this PC before and gone now: the player deleted it */
+            if (creation_delete(s->name)) {
+                creation_remove(&creations_synced, s->name);
+                ++gone;
+            }
+        } else if (creation_download(s->name)) {
+            creation_put(&creations_local, s->name, s->commit);
+            creation_put(&creations_synced, s->name, s->commit);
+            ++down;
+        }
+    }
+    for (unsigned i = 0; i < creations_local.count; ++i) {
+        Creation *l = &creations_local.item[i];
+        Creation *s = creation_find(&creations_server, l->name);
+        if (s && memory_equal(s->commit, l->commit, 64)) {
+            creation_put(&creations_synced, l->name, l->commit);
+        } else if (creation_upload(l->name, l->commit)) {
+            creation_put(&creations_synced, l->name, l->commit);
+            ++up;
+        }
+    }
+    creations_save();
+    static char line[160];
+    line[0] = 0;
+    char number[12];
+    static const char *const parts[] = {"CLOUD: creations in sync (", 0, " kept on the server; ", 0, " uploaded, ", 0, " downloaded, ",
+                           0, " deleted).\r\n"};
+    unsigned values[4];
+    values[0] = creations_server.count;
+    values[1] = up;
+    values[2] = down;
+    values[3] = gone;
+    size_t n = 0;
+    for (unsigned i = 0; i < ARRAY_COUNT(parts); ++i) {
+        const char *part = parts[i];
+        if (!part) {
+            unsigned v = values[i / 2], d = 0;
+            char digits[12];
+            do {
+                digits[d++] = (char)('0' + v % 10);
+                v /= 10;
+            } while (v);
+            for (unsigned j = 0; j < d; ++j) {
+                number[j] = digits[d - 1 - j];
+            }
+            number[d] = 0;
+            part = number;
+        }
+        for (; *part && n + 1 < sizeof(line); ++part) {
+            line[n++] = *part;
+        }
+    }
+    line[n] = 0;
+    log_append(line);
+}
+
+/* Every minute while playing: new or changed creations go up, deleted ones are deleted. */
+static void creations_poll(void) {
+    int changed = 0;
+    if (!creations_player[0] || !creations_scan(&creations_local)) {
+        return;
+    }
+    for (unsigned i = 0; i < creations_local.count; ++i) {
+        Creation *l = &creations_local.item[i];
+        Creation *s = creation_find(&creations_synced, l->name);
+        if ((!s || !memory_equal(s->commit, l->commit, 64)) && creation_upload(l->name, l->commit)) {
+            creation_put(&creations_synced, l->name, l->commit);
+            cloud_log("creation uploaded: ", l->name);
+            changed = 1;
+        }
+    }
+    for (unsigned i = creations_synced.count; i-- > 0;) {
+        static char name[CREATION_NAME];
+        memory_copy(name, creations_synced.item[i].name, CREATION_NAME);
+        if (!creation_find(&creations_local, name) && creation_delete(name)) {
+            creation_remove(&creations_synced, name);
+            cloud_log("creation deleted: ", name);
+            changed = 1;
+        }
+    }
+    if (changed) {
+        creations_save();
+    }
+}
+
 /* ----------------------------------------------------------------- entry */
 
 /* Set once this session started in step with the server's save: only then are its new
@@ -681,6 +1272,7 @@ static DWORD WINAPI cloud_watch(void *unused) {
         if (!cloud_session_synced || cloud_stopped) {
             continue;
         }
+        creations_poll();
         char server[65];
         int state = server_info(server);
         if (state == 2) {
@@ -840,6 +1432,12 @@ void azimuth_cloud_start(const wchar_t *bin, const wchar_t *xuid, const wchar_t 
             }
         } else {
             log_append("CLOUD: could not download the server's save; this session's progress will not reach the online profile.\r\n");
+        }
+    }
+    if (cloud_session_synced) {
+        static wchar_t folder[CLOUD_PATH];
+        if (wjoin(folder, L"User_", h, 0)) {
+            creations_start(folder);
         }
     }
     HANDLE thread = CreateThread(0, 0, cloud_watch, 0, 0, 0);
