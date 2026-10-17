@@ -1384,8 +1384,15 @@ void azimuth_cloud_start(const wchar_t *bin, const wchar_t *xuid, const wchar_t 
     newest_revision(&local, &highest);
     char server[65];
     int state = server_info(server);
-    /* the last session's progress was not accepted: the cloud save, whatever this one is */
+    /* the last session's progress was not accepted: the cloud save, whatever this one is (never
+       for a Noob profile: the server takes all of its progress, so a mark left from before is
+       dropped and the local save stays) */
     int forced = cloud_restore_marked();
+    if (forced && azimuth_account_noob()) {
+        forced = 0;
+        cloud_mark_restore(0);
+        log_append("CLOUD: a Noob profile keeps its own save; the earlier restore mark was dropped.\r\n");
+    }
     if (forced && state == 1) {
         state = 2;
     }
