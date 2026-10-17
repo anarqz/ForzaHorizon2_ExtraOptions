@@ -752,9 +752,80 @@ static void account_error(DWORD status, const char *reply, wchar_t *message, siz
     }
 }
 
+/* The standalone ExtraOptions (0.2.88 and later install it as winmm.dll next to azimuth.exe)
+   running beside this hook, which is ExtraOptions already: both would patch the game. Its
+   winmm.dll (and its INI) are renamed *.extraoptions-off, so the next start runs one copy; the
+   player is told to restart. Any other winmm.dll there is left alone. */
+typedef BOOL(WINAPI *AccountMoveFileFn)(LPCWSTR, LPCWSTR, DWORD);
+
+/* Set when a standalone ExtraOptions ran beside the hook this time: the status line says so. */
+static volatile LONG account_two_extraoptions;
+
+static int account_file_has(const wchar_t *path, const char *needle) {
+    HANDLE file = CreateFileW(path, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, 0,
+                              OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, 0);
+    LARGE_INTEGER length;
+    int found = 0;
+    if (file == INVALID_HANDLE_VALUE) {
+        return 0;
+    }
+    if (GetFileSizeEx(file, &length) && length.QuadPart > 0 && length.QuadPart < (16 << 20)) {
+        char *data = HeapAlloc(GetProcessHeap(), 0, (size_t)length.QuadPart);
+        DWORD got = 0;
+        if (data && ReadFile(file, data, (DWORD)length.QuadPart, &got, 0)) {
+            found = text_find(data, got, needle) != 0;
+        }
+        if (data) {
+            HeapFree(GetProcessHeap(), 0, data);
+        }
+    }
+    CloseHandle(file);
+    return found;
+}
+
+static void account_check_extraoptions(void) {
+    static wchar_t directory[MAX_PATH + 1], path[MAX_PATH + 40], off[MAX_PATH + 60];
+    static const wchar_t *const names[2] = {L"winmm.dll", L"FH2_ExtraOptions.ini"};
+    DWORD n = GetModuleFileNameW(0, directory, MAX_PATH);
+    if (!n || n >= MAX_PATH) {
+        return;
+    }
+    while (n && directory[n - 1] != L'\\' && directory[n - 1] != L'/') {
+        --n;
+    }
+    directory[n] = 0;
+    if (!path_join(path, directory, names[0]) || !account_file_has(path, "ExtraOptions")) {
+        return;
+    }
+    AccountMoveFileFn move =
+        (AccountMoveFileFn)(uintptr_t)GetProcAddress(GetModuleHandleW(L"kernel32.dll"), "MoveFileExW");
+    int moved = 1;
+    InterlockedExchange(&account_two_extraoptions, 1);
+    for (int i = 0; i < 2; ++i) {
+        if (!path_join(path, directory, names[i]) || !path_join(off, directory, names[i])) {
+            continue;
+        }
+        size_t o = wide_len(off);
+        static const wchar_t suffix[] = L".extraoptions-off";
+        memory_copy(off + o, suffix, sizeof(suffix));
+        if (GetFileAttributesW(path) != INVALID_FILE_ATTRIBUTES &&
+            !(move && move(path, off, MOVEFILE_REPLACE_EXISTING)) && i == 0) {
+            moved = 0;
+        }
+    }
+    if (moved) {
+        log_append("ACCOUNT: a standalone ExtraOptions (winmm.dll next to azimuth.exe) ran beside this hook; turned off (*.extraoptions-off).\r\n");
+        azimuth_account_set_notice("A separate copy of ExtraOptions (winmm.dll next to azimuth.exe) is running beside ForzaInfinity, which already includes ExtraOptions: both patch the game. It was turned off (kept as winmm.dll.extraoptions-off). Restart the game. Your ExtraOptions settings are in data\\bin\\FH2_ExtraOptions.ini.");
+    } else {
+        log_append("ACCOUNT: a standalone ExtraOptions (winmm.dll next to azimuth.exe) runs beside this hook and could not be turned off.\r\n");
+        azimuth_account_set_notice("A separate copy of ExtraOptions (winmm.dll next to azimuth.exe) is running beside ForzaInfinity, which already includes ExtraOptions: both patch the game. Close the game and delete winmm.dll, FH2_ExtraOptions.ini and Gamerpic.png from the folder of azimuth.exe.");
+    }
+}
+
 static DWORD WINAPI account_thread(void *unused) {
     static char reply[2048], text[400], gamertag[32];
     (void)unused;
+    account_check_extraoptions();
     /* no profile under this address: one of this server's saved under another comes in */
     if (!account_token[0]) {
         if (!account_adopt() || account_online[0] != L'1') {
@@ -1179,6 +1250,9 @@ int azimuth_account_banner(char *out, size_t cap, const char **color) {
     if (azimuth_cloud_stopped()) {
         text_add(out, cap, azimuth_tr8("INFINITY  |  RESTART YOUR GAME"));
         *color = "#ff4f4f";
+    } else if (account_two_extraoptions) {
+        text_add(out, cap, azimuth_tr8("INFINITY  |  EXTRAOPTIONS TWICE  |  RESTART THE GAME"));
+        *color = "#f5c400";
     } else if (update == UPDATE_INSTALLED) {
         text_add(out, cap, azimuth_tr8("INFINITY  |  UPDATE INSTALLED  |  RESTART THE GAME"));
         *color = "#f5c400";
