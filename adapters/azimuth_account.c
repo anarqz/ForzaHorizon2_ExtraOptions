@@ -1188,6 +1188,8 @@ int azimuth_account_banner(char *out, size_t cap, const char **color) {
     } else if (account_active && link != 2) {
         wide_to_ascii(account_gamertag, tag, sizeof(tag));
         text_add(out, cap, azimuth_tr8("INFINITY  |  CONNECTED  |  "));
+        /* the profile type: NB (Noob) or HC (Hardcore), the players it meets */
+        text_add(out, cap, account_noob ? "NB  |  " : "HC  |  ");
         text_add(out, cap, tag);
         *color = "#3ddc84";
     } else if (link == 2) {
