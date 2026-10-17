@@ -691,6 +691,10 @@ static void back_up(const CloudRevision *revision) {
 #define CREATION_NAME 80
 #define CREATION_FILES 16
 #define CREATION_MAX_BUNDLE (1u << 20) /* as the server takes */
+/* Uploads (and deletions) per round, at start and then every minute; a refused one ends the
+   round: the first sync of a PC with many creations is spread over minutes instead of filling
+   the server's connections (2026-10-17). */
+#define CREATION_PER_ROUND 4
 
 typedef struct {
     char name[CREATION_NAME];
@@ -708,6 +712,11 @@ static wchar_t creations_file[CLOUD_PATH];   /* <saves>\fh2online-creations-User
 
 static int creation_name_ok(const char *name) {
     size_t n = text_length(name), kind = 0;
+    /* garage thumbnails (one per car, made again by the game) are not synced: the server does not
+       keep them */
+    if (n > 16 && memory_equal(name, "GarageThumbnail_", 16)) {
+        return 0;
+    }
     while (kind < n && ((name[kind] | 32) >= 'a' && (name[kind] | 32) <= 'z')) {
         ++kind;
     }
@@ -1184,14 +1193,20 @@ static void creations_start(const wchar_t *profile_folder_name) {
             ++down;
         }
     }
+    int round = CREATION_PER_ROUND; /* the rest go up with the next rounds (creations_poll) */
     for (unsigned i = 0; i < creations_local.count; ++i) {
         Creation *l = &creations_local.item[i];
         Creation *s = creation_find(&creations_server, l->name);
         if (s && memory_equal(s->commit, l->commit, 64)) {
             creation_put(&creations_synced, l->name, l->commit);
-        } else if (creation_upload(l->name, l->commit)) {
+        } else if (round > 0) {
+            if (!creation_upload(l->name, l->commit)) {
+                round = 0;
+                continue;
+            }
             creation_put(&creations_synced, l->name, l->commit);
             ++up;
+            --round;
         }
     }
     creations_save();
@@ -1235,19 +1250,26 @@ static void creations_poll(void) {
     if (!creations_player[0] || !creations_scan(&creations_local)) {
         return;
     }
-    for (unsigned i = 0; i < creations_local.count; ++i) {
+    int round = CREATION_PER_ROUND;
+    for (unsigned i = 0; i < creations_local.count && round > 0; ++i) {
         Creation *l = &creations_local.item[i];
         Creation *s = creation_find(&creations_synced, l->name);
-        if ((!s || !memory_equal(s->commit, l->commit, 64)) && creation_upload(l->name, l->commit)) {
-            creation_put(&creations_synced, l->name, l->commit);
-            cloud_log("creation uploaded: ", l->name);
-            changed = 1;
+        if (s && memory_equal(s->commit, l->commit, 64)) {
+            continue;
         }
+        if (!creation_upload(l->name, l->commit)) {
+            break; /* refused or unreachable: the next minute */
+        }
+        creation_put(&creations_synced, l->name, l->commit);
+        cloud_log("creation uploaded: ", l->name);
+        changed = 1;
+        --round;
     }
-    for (unsigned i = creations_synced.count; i-- > 0;) {
+    round = CREATION_PER_ROUND;
+    for (unsigned i = creations_synced.count; i-- > 0 && round > 0;) {
         static char name[CREATION_NAME];
         memory_copy(name, creations_synced.item[i].name, CREATION_NAME);
-        if (!creation_find(&creations_local, name) && creation_delete(name)) {
+        if (!creation_find(&creations_local, name) && (--round, creation_delete(name))) {
             creation_remove(&creations_synced, name);
             cloud_log("creation deleted: ", name);
             changed = 1;
