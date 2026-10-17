@@ -1185,13 +1185,14 @@ int azimuth_account_banner(char *out, size_t cap, const char **color) {
     } else if (update == UPDATE_AVAILABLE && link != 2) {
         text_add(out, cap, azimuth_tr8("INFINITY  |  UPDATE AVAILABLE  |  SEE SETTINGS > INFINITY"));
         *color = "#f5c400";
-    } else if (account_active && link != 2) {
+    } else if ((account_active && link != 2) || (account_token[0] && account_gamertag[0] && link == 2)) {
+        /* INFINITY | CONNECTED / DISCONNECTED | NB (Noob) or HC (Hardcore), the players it meets |
+           the profile */
         wide_to_ascii(account_gamertag, tag, sizeof(tag));
-        text_add(out, cap, azimuth_tr8("INFINITY  |  CONNECTED  |  "));
-        /* the profile type: NB (Noob) or HC (Hardcore), the players it meets */
+        text_add(out, cap, azimuth_tr8(link == 2 ? "INFINITY  |  DISCONNECTED  |  " : "INFINITY  |  CONNECTED  |  "));
         text_add(out, cap, account_noob ? "NB  |  " : "HC  |  ");
         text_add(out, cap, tag);
-        *color = "#3ddc84";
+        *color = link == 2 ? "#ff4f4f" : "#3ddc84";
     } else if (link == 2) {
         text_add(out, cap, azimuth_tr8("INFINITY  |  NO CONNECTION TO THE SERVER"));
         *color = "#ff4f4f";

@@ -436,6 +436,8 @@ static const LangText8 lang_texts8[] = {
      "INFINITY  |  ATUALIZAÇÃO DISPONÍVEL  |  VEJA CONFIGURAÇÕES > INFINITY"},
     {"INFINITY  |  CONNECTED  |  ",
      "INFINITY  |  CONECTADO  |  "},
+    {"INFINITY  |  DISCONNECTED  |  ",
+     "INFINITY  |  DESCONECTADO  |  "},
     {"INFINITY  |  NO CONNECTION TO THE SERVER",
      "INFINITY  |  SEM CONEXÃO COM O SERVIDOR"},
     {"INFINITY  |  ONLINE PROFILE OFF",
